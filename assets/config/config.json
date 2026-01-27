@@ -1,8 +1,8 @@
 {
-  "name": "Cause FX",
-  "useSSL": true,
-  "host": "",
-  "token": "",
-  "movies": "1",
-  "tv": "2"
+    "name": "XPHUNK Plex",
+    "useSSL": false,
+    "host": "192.168.1.193:32400",
+    "token": "FLh-Atx6LwEojDYbw1yu",
+    "movies": "1",
+    "tv": "2"
 }
