@@ -181,7 +181,7 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
                 <tr>
                     <th>Poster</th>
                     <th><?=substr($typeselect, 0, -1);?> Name</th>
-                    <?php if($type == "tv"){ echo "<th>Episode Name</th>"; }?>
+                    <th style="<?=($type == "movie") ? 'display:none;' : '';?>">Episode Name</th>
                     <th>Quality</th>
                     <th>Release Date</th>
                     <th>Rating</th>
@@ -203,7 +203,7 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
                     echo '<tr class="gradeA">';
                     echo '<td><center><a href="#myModal'.$modalId.'" data-toggle="modal"><img src="'.$imgurl.$trueimage.$imgurlend.'"></a></center></td>';
                     echo '<td>'.$showTitle.'</td>';
-                    if($type == "tv"){ echo '<td>'.$episodeTitle.'</td>'; }
+                    echo '<td style="'.($type == "movie" ? 'display:none;' : '').'">'.htmlspecialchars($episodeTitle).'</td>';
                     echo '<td>'.$videoRes.'</td>';
                     echo '<td>'.$child['originallyAvailableAt'].'</td>';
                     echo '<td>'.$child['rating'].'</td>';
