@@ -30,16 +30,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
     $token = trim($_POST['token'] ?? $token);
     $movies = trim($_POST['movies'] ?? $movies);
     $tv = trim($_POST['tv'] ?? $tv);
-    $save = [
-        'name' => $name,
-        'useSSL' => $useSSL,
-        'host' => $host,
-        'token' => $token,
-        'movies' => $movies,
-        'tv' => $tv
-    ];
-    @mkdir(__DIR__ . '/assets/config', 0777, true);
-    @file_put_contents($configPath, json_encode($save, JSON_PRETTY_PRINT));
+    // Basic connectivity check before saving
+    $httpTmp = $useSSL ? 'https' : 'http';
+    $probeOk = false;
+    if (!empty($host) && !empty($token)) {
+        $probeUrl = "$httpTmp://$host/library/sections?X-Plex-Token=$token";
+        $probeXml = @simplexml_load_file($probeUrl);
+        if ($probeXml !== false) { $probeOk = true; }
+    }
+    if ($probeOk) {
+        $save = [
+            'name' => $name,
+            'useSSL' => $useSSL,
+            'host' => $host,
+            'token' => $token,
+            'movies' => $movies,
+            'tv' => $tv
+        ];
+        @mkdir(__DIR__ . '/assets/config', 0777, true);
+        @file_put_contents($configPath, json_encode($save, JSON_PRETTY_PRINT));
+        $_SESSION['settings_status'] = 'success';
+        $_SESSION['settings_message'] = 'Settings saved. Connection to Plex verified.';
+    } else {
+        $_SESSION['settings_status'] = 'error';
+        $_SESSION['settings_message'] = 'Could not verify connection to Plex. Check host and token. Settings were not saved.';
+    }
 }
 
 //DONT CHANGE THESE PARAMETERS
@@ -144,6 +159,9 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
 </div>
 
 <div class="container">
+    <?php if (!empty($_SESSION['settings_message'])) { $cls = ($_SESSION['settings_status'] === 'success') ? 'alert-success' : 'alert-danger'; ?>
+    <div class="alert <?=$cls?>" style="margin-top:10px"><?=htmlspecialchars($_SESSION['settings_message'])?></div>
+    <?php unset($_SESSION['settings_message'], $_SESSION['settings_status']); } ?>
 
     <div class="row">
         <div class="col-sm-12 col-lg-12">
