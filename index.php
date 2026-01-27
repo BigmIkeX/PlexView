@@ -1,11 +1,46 @@
 <?php
-#CHANGE THESE HERE
+session_start();
+#CHANGE THESE HERE (defaults if no settings saved)
 $name = "Cause FX"; //your name here :)
 $useSSL = true; //Use SSL?
-$host = "hostname:port"; //Dont use localhost or etc, it will prevent images from loading,also dont inlcude http(s)
-$token = "xxxxxxxxxxxxx"; //Plex Token
+$host = ""; //Plex server host:port (no protocol)
+$token = ""; //Plex Token
 $movies = "1"; //Library Section for Movies
 $tv = "2"; //Library Section for TV Shows
+
+// Load saved settings from config.json if available
+$configPath = __DIR__ . '/assets/config/config.json';
+if (file_exists($configPath)) {
+    $cfg = json_decode(@file_get_contents($configPath), true);
+    if (is_array($cfg)) {
+        $name = isset($cfg['name']) ? $cfg['name'] : $name;
+        $useSSL = isset($cfg['useSSL']) ? !!$cfg['useSSL'] : $useSSL;
+        $host = isset($cfg['host']) ? $cfg['host'] : $host;
+        $token = isset($cfg['token']) ? $cfg['token'] : $token;
+        $movies = isset($cfg['movies']) ? (string)$cfg['movies'] : $movies;
+        $tv = isset($cfg['tv']) ? (string)$cfg['tv'] : $tv;
+    }
+}
+
+// Handle settings save
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
+    $name = trim($_POST['name'] ?? $name);
+    $useSSL = isset($_POST['useSSL']) && $_POST['useSSL'] === '1';
+    $host = trim($_POST['host'] ?? $host);
+    $token = trim($_POST['token'] ?? $token);
+    $movies = trim($_POST['movies'] ?? $movies);
+    $tv = trim($_POST['tv'] ?? $tv);
+    $save = [
+        'name' => $name,
+        'useSSL' => $useSSL,
+        'host' => $host,
+        'token' => $token,
+        'movies' => $movies,
+        'tv' => $tv
+    ];
+    @mkdir(__DIR__ . '/assets/config', 0777, true);
+    @file_put_contents($configPath, json_encode($save, JSON_PRETTY_PRINT));
+}
 
 //DONT CHANGE THESE PARAMETERS
 ini_set('display_errors',1);  error_reporting(E_ALL);
@@ -15,11 +50,19 @@ $type = isset($_GET['type']) ? $_GET['type'] : 'movie';
 $section = ($type == "movie") ? $movies : $tv;
 $typeselect = ($type == "movie") ? "Movies" : "TV Shows";
 $parent = ($act == "all" && $type == "tv") ? "Directory" : "Video";
-$url = "$http://$host/library/sections/$section/$act?X-Plex-Token=$token";
-$imgurl = "$http://$host/photo/:/transcode?url=";
-$imgurlend = "&width=100&height=100&X-Plex-Token=$token";
-$imgurlendhq = "&width=300&height=300&X-Plex-Token=$token";
-$achxml = simplexml_load_file($url);
+// Build URLs only if configured
+$achxml = false;
+if (!empty($host) && !empty($token)) {
+    $url = "$http://$host/library/sections/$section/$act?X-Plex-Token=$token";
+    $imgurl = "$http://$host/photo/:/transcode?url=";
+    $imgurlend = "&width=100&height=100&X-Plex-Token=$token";
+    $imgurlendhq = "&width=300&height=300&X-Plex-Token=$token";
+    $achxml = @simplexml_load_file($url);
+} else {
+    $imgurl = '';
+    $imgurlend = '';
+    $imgurlendhq = '';
+}
 
 $actarray = array
 (
@@ -95,6 +138,7 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
                 <span class="icon-bar">3</span>
             </button>
             <a class="navbar-brand" href="<?=basename(__FILE__);?>"><img src="assets/img/logo30.png" alt=""><?=$name;?>'s Plex Library</a>
+            <a class="btn btnnew" style="margin-left:10px" href="#settingsModal" data-toggle="modal">Settings</a>
         </div>
     </div>
 </div>
@@ -103,11 +147,11 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
 
     <div class="row">
         <div class="col-sm-12 col-lg-12">
-            <h4><?php if($type == "movie"){ echo "Movies | <a href='?act=$act&type=tv' style='color: rgb(0,255,0)'><font color='FF00CC'>TV Shows</font></a>"; }else{ echo "<a href='?act=$act&type=movie'><font color='FF00CC'>Movies</font></a> | TV Shows"; } ?> </h4>
+            <h4><?php if($type == "movie"){ echo "Movies | <a href='?act=$act&type=tv' class='xphunk-link'>TV Shows</a>"; }else{ echo "<a href='?act=$act&type=movie' class='xphunk-link'>Movies</a> | TV Shows"; } ?> </h4>
             <h4><strong><?=$title;?> </strong></h4>
             <?php foreach ($actarray[0] as $action) {
                 $linktitle = $actarray[1][array_search($action, $actarray[0])];
-                echo '<h4><strong><a href="?act='.$action.'&type='.$type.'" style="color: rgb(0,255,0)"><font color="FF00CC">Switch to '.ucfirst($linktitle).'</font></a></strong></h4>';
+                echo '<h4 class="switch-link"><strong><a href="?act='.$action.'&type='.$type.'" class="xphunk-link">Switch to '.ucfirst($linktitle).'</a></strong></h4>';
             }?>
 
 
@@ -126,7 +170,7 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
                 <tbody>
 
                 <!-- CONTENT -->
-                <?php foreach($achxml->$parent AS $child) {
+                <?php if ($achxml && isset($achxml->$parent)) { foreach($achxml->$parent AS $child) {
                     // Handle different XML structures: Directory (TV all) vs Video (episodes/movies)
                     $isDirectory = ($act == "all" && $type == "tv");
                     $modalId = $isDirectory ? $child['ratingKey'] : $child->Media['id'];
@@ -144,11 +188,11 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
                     echo '<td>'.$child['rating'].'</td>';
                     echo '<td>'.$child['contentRating'].'</td>';
                     echo '</tr>';
-                }?>
+                } } else { echo '<tr><td colspan="7" style="text-align:center">Configure your Plex server in Settings to load data.</td></tr>'; }?>
 
                 </tbody>
             </table><!--/END SECOND TABLE -->
-            <?php foreach($achxml->$parent AS $child) {
+            <?php if ($achxml && isset($achxml->$parent)) { foreach($achxml->$parent AS $child) {
                 $isDirectory = ($act == "all" && $type == "tv");
                 $modalId = $isDirectory ? $child['ratingKey'] : $child->Media['id'];
             ?>
@@ -223,7 +267,7 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
                         </div><!-- /.modal-content -->
                     </div><!-- /.modal-dialog -->
                 </div>
-            <?}?>
+            <?php } } ?>
 
         </div><!--/span12 -->
     </div><!-- /row -->
@@ -232,6 +276,11 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
 <br>
 
 <br>
+<?php if (empty($host) || empty($token)) { ?>
+<div class="container">
+    <div class="alert alert-warning" style="margin-top:10px">Plex server is not configured. Open <a href="#settingsModal" data-toggle="modal">Settings</a> to add your server details.</div>
+    </div>
+<?php } ?>
 <!-- FOOTER -->
 <div id="footerwrap">
     <footer class="clearfix"></footer>
@@ -252,6 +301,53 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
 <!-- Placed at the end of the document so the pages load faster -->
 <script type="text/javascript" src="assets/js/bootstrap.js"></script>
 <script type="text/javascript" src="assets/js/admin.js"></script>
+
+<!-- Settings Modal -->
+<div class="modal fade" id="settingsModal" tabindex="-1" role="dialog" aria-labelledby="settingsLabel" aria-hidden="true" style="display: none;">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">X</button>
+                <h4 class="modal-title" id="settingsLabel">Settings</h4>
+            </div>
+            <form method="post">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Display Name</label>
+                    <input type="text" name="name" class="form-control" value="<?=htmlspecialchars($name)?>" />
+                </div>
+                <div class="form-group">
+                    <label>Use SSL (HTTPS)</label>
+                    <select name="useSSL" class="form-control">
+                        <option value="1" <?=($useSSL ? 'selected' : '')?>>Yes</option>
+                        <option value="0" <?=(!$useSSL ? 'selected' : '')?>>No</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Plex Host (e.g. 192.168.1.10:32400)</label>
+                    <input type="text" name="host" class="form-control" value="<?=htmlspecialchars($host)?>" />
+                </div>
+                <div class="form-group">
+                    <label>Plex Token</label>
+                    <input type="text" name="token" class="form-control" value="<?=htmlspecialchars($token)?>" />
+                </div>
+                <div class="form-group">
+                    <label>Movies Section ID</label>
+                    <input type="text" name="movies" class="form-control" value="<?=htmlspecialchars($movies)?>" />
+                </div>
+                <div class="form-group">
+                    <label>TV Section ID</label>
+                    <input type="text" name="tv" class="form-control" value="<?=htmlspecialchars($tv)?>" />
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+                <button type="submit" name="settings_submit" value="1" class="btn btn-primary">Save Settings</button>
+            </div>
+            </form>
+        </div>
+    </div>
+</div>
 
 
 </body></html>

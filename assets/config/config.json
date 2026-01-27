@@ -1,0 +1,8 @@
+{
+  "name": "Cause FX",
+  "useSSL": true,
+  "host": "",
+  "token": "",
+  "movies": "1",
+  "tv": "2"
+}
