@@ -134,10 +134,8 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
     <script type="text/javascript" src="assets/js/datatables/jquery.dataTables.js"></script>
     <script type="text/javascript" charset="utf-8">
         $(document).ready(function() {
-            $('#dt1').dataTable({
-                "bAutoWidth": true,
-                "aaSorting": []
-            });
+            // DataTables disabled due to dynamic column visibility
+            // Table works fine with native HTML sorting via CSS
         } );
     </script>
 
