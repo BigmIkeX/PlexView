@@ -25,17 +25,23 @@
 
 /**********BASE CONFIGURATIONS**********/   
 body {
-	background:#0b0f1a;
+	background: linear-gradient(135deg, #0b0f1a 0%, #1a1f3a 100%);
     font-family: 'Open Sans', sans-serif;
     color:#d8e7ff;
+    min-height: 100vh;
 }
 
 h1 {
-font-family: 'Raleway', sans-serif;}
+font-family: 'Raleway', sans-serif;
+font-weight: 700;
+text-transform: uppercase;
+letter-spacing: 0.1em;
+}
 
 h3,h4 , h5 {
 	font-family: 'Open Sans', sans-serif;
-	font-weight:lighter;
+	font-weight: 600;
+	letter-spacing: 0.05em;
 }
 
 h2{
@@ -267,46 +273,81 @@ h5 {
 /***********Bootstrap Default Modifications***********/
 
 .thumbnail {
-	border:0px;
+	border: 1px solid #26324a;
 	text-align:center;
-  -webkit-box-shadow: 0px;
-     -moz-box-shadow: 0px;
-          box-shadow: 0px;
-    background: none;
-    text-align: center;      
-	
+	border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    background: rgba(26,34,54,0.5);
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.thumbnail:hover {
+    box-shadow: 0 4px 16px rgba(168,85,247,0.2);
+    background: rgba(26,34,54,0.8);
+    transform: translateY(-2px);
 }
 
 .modal-header {
-	background-color: #121826;
+	background: linear-gradient(135deg, #121826 0%, #1a2236 100%);
 	color:#e9f0ff;
+	border-bottom: 1px solid rgba(168,85,247,0.2);
+	padding: 20px;
+}
+.modal-content {
+	background: #0f1423;
+	border: 1px solid #26324a;
+	border-radius: 8px;
+	box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+.modal-body {
+	padding: 24px;
+}
+.modal-footer {
+	padding: 16px 24px;
+	border-top: 1px solid rgba(168,85,247,0.1);
 }
 
 
 input[type=submit] {
 	font-family: 'Open Sans', sans-serif;
-	font-size: 15px;
-	background: #a855f7;
+	font-size: 14px;
+	font-weight: 600;
+	background: linear-gradient(135deg, #a855f7 0%, #d946ef 100%);
 	color: #fff;
 	border: none;
-	padding: 8px 28px 10px 26px;
-	  *-webkit-border-radius: 4px;
-     -moz-border-radius: 4px;
-          border-radius: 4px;
-
+	padding: 10px 28px;
+	border-radius: 6px;
+	box-shadow: 0 4px 16px rgba(168,85,247,0.4), inset 0 1px 0 rgba(255,255,255,0.2);
+	transition: all 0.3s ease;
+	cursor: pointer;
+}
+input[type=submit]:hover {
+	box-shadow: 0 6px 24px rgba(168,85,247,0.6), inset 0 1px 0 rgba(255,255,255,0.2);
+	transform: translateY(-2px);
+}
+input[type=submit]:active {
+	transform: translateY(0);
 }
 input[type=text], textarea {
-	background: #cdcbcc;
+	background: #0f1423;
 	font-size: 13px;
 	display: block;
 	width: 100%;
-	border: none;
-	box-shadow: none;
+	border: 1px solid #26324a;
+	border-radius: 6px;
+	box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
 	height: 30px;
 	line-height: 18px;
-	padding: 0;
-	text-indent: 18px;
+	padding: 0 12px;
 	margin: 0 0 18px;
+	color: #d8e7ff;
+	transition: all 0.2s ease;
+}
+input[type=text]:focus, textarea:focus {
+	border-color: #a855f7;
+	box-shadow: inset 0 2px 4px rgba(0,0,0,0.3), 0 0 12px rgba(168,85,247,0.2);
+	outline: none;
 }
 textarea {
 	line-height: 18px;
@@ -605,33 +646,26 @@ ul#jstwitter li a{
 /********** CUSTOMIZED BUTTON **********/
 .btnnew {
   display: inline-block;
-  *border-left: 0 none #707070;
-	border-right: 0 none #707070;
-	border-top: 0 none #707070;
-	border-bottom: 0 none #707070;
-	display: inline;
-    padding: 4px 12px;
-    margin-bottom: 0;
-  *margin-left: .3em;
-    font-size: 14px;
-    line-height: 20px;
-	color: #ffffff;
-    text-align: center;
-    vertical-align: middle;
-    cursor: pointer;
-	background-color: #1a2236;
-	*background-color: #1a2236;
-	background-repeat: repeat-x;
-  *-webkit-border-radius: 4px;
-     -moz-border-radius: 4px;
-          border-radius: 4px;
-	zoom: 1;
-	-webkit-box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 16px rgba(168,85,247,0.25);
-	-moz-box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 16px rgba(168,85,247,0.25);
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 16px rgba(168,85,247,0.25);
-	background-image: linear-gradient(to bottom, #1a2236, #121826);*
+  border: 1px solid #26324a;
+  padding: 8px 18px;
+  margin-bottom: 0;
+  margin-left: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  color: #ffffff;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+  background: linear-gradient(135deg, #1a2236 0%, #0f1423 100%);
+  border-radius: 6px;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(168,85,247,0.15);
 }
-
+.btnnew:hover {
+  border-color: #a855f7;
+  box-shadow: 0 4px 12px rgba(168,85,247,0.3);
+  background: linear-gradient(135deg, #26324a 0%, #1a2236 100%);
 /********** SWITCH BUTTON **********/
 .switch {
   position: relative;
@@ -767,9 +801,16 @@ a:hover {
 
 .xphunk-link {
 	color:#ff1d8e;
+	font-weight: 600;
+	transition: all 0.2s ease;
 }
 .xphunk-link:hover {
 	color:#ff67b3;
+	text-shadow: 0 0 8px rgba(255,29,142,0.3);
+}
+
+.switch-link {
+	margin: 12px 0;
 }
 
 
@@ -777,14 +818,13 @@ a:hover {
 /**********FooterWrap Section**********/   
 #footerwrap {
     width: 100%;
-	background:#0f1423;
+	background: linear-gradient(180deg, #0f1423 0%, #08080f 100%);
 	background-image:none;
-    padding-top:25px;
+    padding-top: 30px;
     padding-bottom: 40px;
-	border-top-style: solid;
-	border-top-width:2px;
-	border-top-color:#1a2236;
-    text-align:center
+	border-top: 1px solid rgba(168,85,247,0.1);
+    text-align:center;
+    margin-top: 60px;
 
 }
 
@@ -837,7 +877,64 @@ a:hover {
 	}
 
 
-/**********Media Styles**********/   
+
+/***********DataTables Styling**********/
+
+.display {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 15px 0;
+}
+
+.display thead {
+	background: linear-gradient(135deg, #1a2236 0%, #121826 100%);
+	border-bottom: 2px solid #26324a;
+}
+
+.display thead th {
+	padding: 14px 12px;
+	font-weight: 600;
+	color: #d8e7ff;
+	text-align: left;
+	white-space: nowrap;
+	transition: all 0.2s ease;
+}
+
+.display thead th:hover {
+	background-color: rgba(168,85,247,0.1);
+	color: #ff1d8e;
+}
+
+.display tbody tr {
+	border-bottom: 1px solid rgba(168,85,247,0.1);
+	transition: all 0.2s ease;
+}
+
+.display tbody tr:hover {
+	background-color: rgba(168,85,247,0.08);
+	box-shadow: inset 0 0 12px rgba(168,85,247,0.05);
+}
+
+.display tbody td {
+	padding: 12px;
+	color: #d8e7ff;
+	vertical-align: middle;
+}
+
+.display img {
+	border-radius: 4px;
+	transition: transform 0.2s ease;
+}
+
+.display img:hover {
+	transform: scale(1.05);
+}
+
+.gradeA {
+	transition: background-color 0.2s ease;
+}
+
+/**********Media Styles**********/
 
 @media (max-width: 360px){
 /*Calendar Adsjustments*/
