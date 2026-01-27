@@ -127,12 +127,19 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
 
                 <!-- CONTENT -->
                 <?php foreach($achxml->$parent AS $child) {
-                    $trueimage = ($type == "movie") ? $child['thumb'] : $child['grandparentThumb'];
+                    // Handle different XML structures: Directory (TV all) vs Video (episodes/movies)
+                    $isDirectory = ($act == "all" && $type == "tv");
+                    $modalId = $isDirectory ? $child['ratingKey'] : $child->Media['id'];
+                    $trueimage = $isDirectory ? $child['thumb'] : (($type == "movie") ? $child['thumb'] : $child['grandparentThumb']);
+                    $showTitle = $isDirectory ? $child['title'] : (($type == "tv") ? $child['grandparentTitle'] : $child['title']);
+                    $episodeTitle = ($type == "tv" && !$isDirectory) ? $child['title'] : '';
+                    $videoRes = $isDirectory ? 'N/A' : strtoupper($child->Media['videoResolution']);
+                    
                     echo '<tr class="gradeA">';
-                    echo '<td><center><a href="#myModal'.$child->Media['id'].'" data-toggle="modal"><img src="'.$imgurl.$trueimage.$imgurlend.'"></a></center></td>';
-                    if($type == "tv"){ echo '<td>'.$child['grandparentTitle'].'</td>'; }else{ echo '<td>'.$child['title'].'</td>'; }
-                    if($type == "tv"){ echo '<td>'.$child['title'].'</td>'; }
-                    echo '<td>'.strtoupper($child->Media['videoResolution']).'</td>';
+                    echo '<td><center><a href="#myModal'.$modalId.'" data-toggle="modal"><img src="'.$imgurl.$trueimage.$imgurlend.'"></a></center></td>';
+                    echo '<td>'.$showTitle.'</td>';
+                    if($type == "tv"){ echo '<td>'.$episodeTitle.'</td>'; }
+                    echo '<td>'.$videoRes.'</td>';
                     echo '<td>'.$child['originallyAvailableAt'].'</td>';
                     echo '<td>'.$child['rating'].'</td>';
                     echo '<td>'.$child['contentRating'].'</td>';
@@ -141,8 +148,11 @@ if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarr
 
                 </tbody>
             </table><!--/END SECOND TABLE -->
-            <?php foreach($achxml->$parent AS $child) {?>
-                <div class="modal fade" id="myModal<?=$child->Media['id'];?>" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true" style="display: none;">
+            <?php foreach($achxml->$parent AS $child) {
+                $isDirectory = ($act == "all" && $type == "tv");
+                $modalId = $isDirectory ? $child['ratingKey'] : $child->Media['id'];
+            ?>
+                <div class="modal fade" id="myModal<?=$modalId;?>" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true" style="display: none;">
                     <div class="modal-dialog">
                         <div class="modal-content">
                             <div class="modal-header">
