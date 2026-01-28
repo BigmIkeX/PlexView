@@ -1,24 +1,24 @@
 <?php
 session_start();
-#CHANGE THESE HERE (defaults if no settings saved)
-$name = "Cause FX"; //your name here :)
-$useSSL = true; //Use SSL?
-$host = ""; //Plex server host:port (no protocol)
-$token = ""; //Plex Token
-$movies = "1"; //Library Section for Movies
-$tv = "2"; //Library Section for TV Shows
 
-// Load saved settings from config.json if available
+// Configuration defaults
+$name = "Plex Library Viewer";
+$useSSL = true;
+$host = "";
+$port = 32400;
+$token = "";
+$selectedLibraries = [];
+
 $configPath = __DIR__ . '/assets/config/config.json';
 if (file_exists($configPath)) {
-    $cfg = json_decode(@file_get_contents($configPath), true);
+    $cfgContent = file_get_contents($configPath);
+    $cfg = json_decode($cfgContent, true);
     if (is_array($cfg)) {
         $name = isset($cfg['name']) ? $cfg['name'] : $name;
         $useSSL = isset($cfg['useSSL']) ? !!$cfg['useSSL'] : $useSSL;
         $host = isset($cfg['host']) ? $cfg['host'] : $host;
         $token = isset($cfg['token']) ? $cfg['token'] : $token;
-        $movies = isset($cfg['movies']) ? (string)$cfg['movies'] : $movies;
-        $tv = isset($cfg['tv']) ? (string)$cfg['tv'] : $tv;
+        $selectedLibraries = isset($cfg['selectedLibraries']) && is_array($cfg['selectedLibraries']) ? $cfg['selectedLibraries'] : [];
     }
 }
 
@@ -28,345 +28,1317 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
     $useSSL = isset($_POST['useSSL']) && $_POST['useSSL'] === '1';
     $host = trim($_POST['host'] ?? $host);
     $token = trim($_POST['token'] ?? $token);
-    $movies = trim($_POST['movies'] ?? $movies);
-    $tv = trim($_POST['tv'] ?? $tv);
-    // Basic connectivity check before saving
+    $selectedLibraries = isset($_POST['selectedLibraries']) && is_array($_POST['selectedLibraries']) ? $_POST['selectedLibraries'] : [];
+    
     $httpTmp = $useSSL ? 'https' : 'http';
     $probeOk = false;
     if (!empty($host) && !empty($token)) {
         $probeUrl = "$httpTmp://$host/library/sections?X-Plex-Token=$token";
-        $probeXml = @simplexml_load_file($probeUrl);
-        if ($probeXml !== false) { $probeOk = true; }
+        $context = stream_context_create([
+            'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]
+        ]);
+        $probeData = @file_get_contents($probeUrl, false, $context);
+        if ($probeData !== false) {
+            $probeXml = @simplexml_load_string($probeData);
+            if ($probeXml !== false) { $probeOk = true; }
+        }
     }
+    
     if ($probeOk) {
-        $save = [
-            'name' => $name,
-            'useSSL' => $useSSL,
-            'host' => $host,
-            'token' => $token,
-            'movies' => $movies,
-            'tv' => $tv
-        ];
-        @mkdir(__DIR__ . '/assets/config', 0777, true);
+        $save = ['name' => $name, 'useSSL' => $useSSL, 'host' => $host, 'token' => $token, 'selectedLibraries' => $selectedLibraries];
+        @mkdir(__DIR__ . '/assets/config', 0755, true);
         @file_put_contents($configPath, json_encode($save, JSON_PRETTY_PRINT));
         $_SESSION['settings_status'] = 'success';
-        $_SESSION['settings_message'] = 'Settings saved. Connection to Plex verified.';
+        $_SESSION['settings_message'] = 'Settings saved!';
+        // Redirect to prevent form resubmission and clear message after display
+        header('Location: ' . $_SERVER['PHP_SELF']);
+        exit;
     } else {
         $_SESSION['settings_status'] = 'error';
-        $_SESSION['settings_message'] = 'Could not verify connection to Plex. Check host and token. Settings were not saved.';
+        $_SESSION['settings_message'] = 'Could not connect to Plex. Check your settings.';
     }
 }
 
-//DONT CHANGE THESE PARAMETERS
-ini_set('display_errors',1);  error_reporting(E_ALL);
-if($useSSL == true){ $http = "https"; }else{ $http = "http"; }
-$act = isset($_GET['act']) ? $_GET['act'] : 'recentlyAdded';
-$type = isset($_GET['type']) ? $_GET['type'] : 'movie';
-$section = ($type == "movie") ? $movies : $tv;
-$typeselect = ($type == "movie") ? "Movies" : "TV Shows";
-$parent = ($act == "all" && $type == "tv") ? "Directory" : "Video";
-// Build URLs only if configured
-$achxml = false;
+// Fetch media data
+ini_set('display_errors', 0);
+error_reporting(0);
+
+$http = $useSSL ? 'https' : 'http';
+$mediaData = [];
+$allLibraries = [];
+
 if (!empty($host) && !empty($token)) {
-    $url = "$http://$host/library/sections/$section/$act?X-Plex-Token=$token";
-    $imgurl = "$http://$host/photo/:/transcode?url=";
-    $imgurlend = "&width=100&height=100&X-Plex-Token=$token";
-    $imgurlendhq = "&width=300&height=300&X-Plex-Token=$token";
-    $achxml = @simplexml_load_file($url);
-} else {
-    $imgurl = '';
-    $imgurlend = '';
-    $imgurlendhq = '';
+    $context = stream_context_create([
+        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]
+    ]);
+    
+    // Fetch all library sections
+    $url = "$http://$host/library/sections?X-Plex-Token=$token";
+    $xmlData = @file_get_contents($url, false, $context);
+    if ($xmlData) {
+        $xml = @simplexml_load_string($xmlData);
+        if ($xml && isset($xml->Directory)) {
+            foreach ($xml->Directory as $section) {
+                $type = (string)$section['type'];
+                $key = (string)$section['key'];
+                $title = (string)$section['title'];
+                
+                // Include all media library types
+                if (in_array($type, ['movie', 'show', 'artist', 'photo'])) {
+                    $allLibraries[] = [
+                        'key' => $key,
+                        'title' => $title,
+                        'type' => $type
+                    ];
+                }
+            }
+        }
+    }
+    
+    // If no libraries are selected, select all libraries by default
+    if (empty($selectedLibraries) && !empty($allLibraries)) {
+        $selectedLibraries = array_map(function($lib) { return $lib['key']; }, $allLibraries);
+    }
+    
+    // Fetch recently added content for each selected library
+    foreach ($allLibraries as $lib) {
+        if (in_array($lib['key'], $selectedLibraries)) {
+            $libKey = $lib['key'];
+            $libTitle = $lib['title'];
+            $libType = $lib['type'];
+            
+            // TV shows need special handling - use /all with limit instead of recentlyAdded
+            if ($libType === 'show') {
+                // For TV, get first 30 shows from /all endpoint
+                $url = "$http://$host/library/sections/$libKey/all?X-Plex-Container-Start=0&X-Plex-Container-Size=30&X-Plex-Token=$token";
+            } else {
+                $url = "$http://$host/library/sections/$libKey/recentlyAdded?limit=30&X-Plex-Token=$token";
+            }
+            
+            $xmlData = @file_get_contents($url, false, $context);
+            if ($xmlData) {
+                $xml = @simplexml_load_string($xmlData);
+                $items = [];
+                
+                if ($libType === 'movie' && isset($xml->Video)) {
+                    foreach ($xml->Video as $item) {
+                        if ((string)$item['type'] === 'movie') {
+                            // Collect cast
+                            $cast = [];
+                            if (isset($item->Role)) {
+                                foreach ($item->Role as $role) {
+                                    $cast[] = (string)$role['tag'];
+                                    if (count($cast) >= 5) break;
+                                }
+                            }
+                            
+                            // Collect genres
+                            $genres = [];
+                            if (isset($item->Genre)) {
+                                foreach ($item->Genre as $genre) {
+                                    $genres[] = (string)$genre['tag'];
+                                }
+                            }
+                            
+                            $items[] = [
+                                'title' => (string)$item['title'],
+                                'thumb' => (string)$item['thumb'],
+                                'art' => (string)$item['art'],
+                                'ratingKey' => (string)$item['ratingKey'],
+                                'year' => (string)$item['year'],
+                                'summary' => (string)$item['summary'],
+                                'rating' => (string)$item['rating'],
+                                'contentRating' => (string)$item['contentRating'],
+                                'duration' => (string)$item['duration'],
+                                'studio' => (string)$item['studio'],
+                                'tagline' => (string)$item['tagline'],
+                                'cast' => $cast,
+                                'genres' => $genres,
+                                'type' => 'movie'
+                            ];
+                        }
+                    }
+                } elseif ($libType === 'show' && isset($xml->Directory)) {
+                    foreach ($xml->Directory as $item) {
+                        if ((string)$item['type'] === 'show') {
+                            // Collect cast
+                            $cast = [];
+                            if (isset($item->Role)) {
+                                foreach ($item->Role as $role) {
+                                    $cast[] = (string)$role['tag'];
+                                    if (count($cast) >= 5) break;
+                                }
+                            }
+                            
+                            // Collect genres
+                            $genres = [];
+                            if (isset($item->Genre)) {
+                                foreach ($item->Genre as $genre) {
+                                    $genres[] = (string)$genre['tag'];
+                                }
+                            }
+                            
+                            $items[] = [
+                                'title' => (string)$item['title'],
+                                'thumb' => (string)$item['thumb'],
+                                'art' => (string)$item['art'],
+                                'ratingKey' => (string)$item['ratingKey'],
+                                'year' => (string)$item['year'],
+                                'summary' => (string)$item['summary'],
+                                'rating' => (string)$item['rating'],
+                                'contentRating' => (string)$item['contentRating'],
+                                'studio' => (string)$item['studio'],
+                                'cast' => $cast,
+                                'genres' => $genres,
+                                'type' => 'show'
+                            ];
+                        }
+                    }
+                } elseif ($libType === 'artist' && isset($xml->Directory)) {
+                    foreach ($xml->Directory as $item) {
+                        $itemType = (string)$item['type'];
+                        // Music libraries return 'album' in recentlyAdded, not 'artist'
+                        if ($itemType === 'artist' || $itemType === 'album') {
+                            $genres = [];
+                            if (isset($item->Genre)) {
+                                foreach ($item->Genre as $genre) {
+                                    $genres[] = (string)$genre['tag'];
+                                }
+                            }
+                            
+                            $items[] = [
+                                'title' => (string)$item['title'],
+                                'thumb' => (string)$item['thumb'],
+                                'art' => (string)$item['art'],
+                                'ratingKey' => (string)$item['ratingKey'],
+                                'summary' => (string)$item['summary'],
+                                'genres' => $genres,
+                                'type' => 'artist'
+                            ];
+                        }
+                    }
+                } elseif ($libType === 'photo' && isset($xml->Photo)) {
+                    foreach ($xml->Photo as $item) {
+                        $items[] = [
+                            'title' => (string)$item['title'],
+                            'thumb' => (string)$item['thumb'],
+                            'ratingKey' => (string)$item['ratingKey'],
+                            'year' => (string)$item['year'],
+                            'type' => 'photo'
+                        ];
+                    }
+                }
+                
+                if (!empty($items)) {
+                    $mediaData[$libKey] = [
+                        'title' => $libTitle,
+                        'type' => $libType,
+                        'items' => array_slice($items, 0, 30)
+                    ];
+                }
+            }
+        }
+    }
 }
 
-$actarray = array
-(
-    array("newest","all","recentlyAdded", "recentlyViewed"),
-    array("Newest Released $typeselect","All $typeselect","Recently Added $typeselect", "Recently Viewed $typeselect")
-);
+// Debug: Log library counts
+error_log('PlexView Debug - Total libraries: ' . count($mediaData));
+foreach ($mediaData as $key => $lib) {
+    error_log('  Library ' . $key . ': ' . $lib['title'] . ' (' . $lib['type'] . ') - ' . count($lib['items']) . ' items');
+}
 
-$title = $actarray[1][array_search($act, $actarray[0])];
+// Collect all recent items for hero rotation (up to 20)
+$heroItems = [];
+foreach ($mediaData as $lib) {
+    foreach ($lib['items'] as $item) {
+        $heroItems[] = $item;
+        if (count($heroItems) >= 20) break 2;
+    }
+}
 
-if (in_array($act, $actarray[0])) {unset($actarray[0] [array_search($act,$actarray[0] )]);}
+// Organize media by type for different views
+$movieLibraries = [];
+$tvLibraries = [];
+$musicLibraries = [];
+$photoLibraries = [];
+$allMovies = [];
+$allTV = [];
+$top20Recent = [];
 
+foreach ($mediaData as $libKey => $lib) {
+    if ($lib['type'] === 'movie') {
+        $movieLibraries[$libKey] = $lib;
+        $allMovies = array_merge($allMovies, $lib['items']);
+    } elseif ($lib['type'] === 'show') {
+        $tvLibraries[$libKey] = $lib;
+        $allTV = array_merge($allTV, $lib['items']);
+    } elseif ($lib['type'] === 'artist') {
+        $musicLibraries[$libKey] = $lib;
+    } elseif ($lib['type'] === 'photo') {
+        $photoLibraries[$libKey] = $lib;
+    }
+}
+
+// Create Top 20 recently added from all selected sections
+foreach ($mediaData as $lib) {
+    foreach ($lib['items'] as $item) {
+        $top20Recent[] = $item;
+        if (count($top20Recent) >= 20) break 2;
+    }
+}
+
+function getImageUrl($thumb) {
+    global $http, $host, $token;
+    if (empty($thumb) || empty($host)) return '/images/placeholder.png';
+    return "$http://$host/photo/:/transcode?url=$thumb&width=400&height=600&X-Plex-Token=$token";
+}
+
+function getHeroImageUrl($thumb) {
+    global $http, $host, $token;
+    if (empty($thumb) || empty($host)) return '/images/placeholder.png';
+    return "$http://$host/photo/:/transcode?url=$thumb&width=1920&height=1080&X-Plex-Token=$token";
+}
 ?>
-
-<!doctype html>
-<html><head>
-    <meta charset="utf-8">
-    <title><?=$name;?>'s Plex Library</title>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="">
-    <meta name="author" content="">
+    <title><?php echo htmlspecialchars($name); ?></title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    <!-- Le styles -->
-    <link href="assets/css/bootstrap.css" rel="stylesheet">
-    <link href="assets/css/main.css" rel="stylesheet">
-    <!-- DATA TABLE CSS -->
-    <link href="assets/css/table.css" rel="stylesheet">
-
-
-
-    <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
-
-    <style type="text/css">
         body {
-            padding-top: 60px;
+            background: #0f0f0f;
+            color: #e5e5e5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            overflow-x: hidden;
+        }
+
+        .navbar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(15, 15, 15, 0.95);
+            border-top: 1px solid rgba(255, 140, 0, 0.2);
+            padding: 12px 0;
+            z-index: 1000;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            height: 60px;
+        }
+
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            cursor: pointer;
+            transition: all 0.3s;
+            color: #888;
+            text-decoration: none;
+            font-size: 12px;
+            gap: 4px;
+        }
+
+        .nav-item:hover {
+            color: #ff8c00;
+        }
+
+        .nav-item.active {
+            color: #ff8c00;
+            border-top: 2px solid #ff8c00;
+        }
+
+        .nav-icon {
+            font-size: 24px;
+        }
+
+        .nav-icon svg {
+            display: block;
+        }
+
+        .content {
+            padding-bottom: 70px;
+            padding-top: 0;
+            max-width: 100%;
+        }
+
+        .hero {
+            position: relative;
+            height: 60vh;
+            background: linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%);
+            overflow: hidden;
+            margin-bottom: 40px;
+        }
+
+        .hero-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-size: cover;
+            background-position: center;
+            opacity: 0.3;
+            z-index: 1;
+        }
+
+        .hero-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, rgba(15,15,15,0.8) 0%, transparent 60%, rgba(15,15,15,0.8) 100%);
+            z-index: 2;
+        }
+
+        .hero-content {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 40px;
+            z-index: 3;
+            background: linear-gradient(180deg, transparent 0%, rgba(15,15,15,0.9) 100%);
+        }
+
+        .hero-title {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: #fff;
+        }
+
+        .hero-meta {
+            font-size: 14px;
+            color: #ff8c00;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 20px;
+        }
+
+        .hero-description {
+            font-size: 16px;
+            color: #ccc;
+            max-width: 600px;
+            line-height: 1.5;
+            margin-bottom: 20px;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 10px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #ff8c00;
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            background: #ffa500;
+            box-shadow: 0 0 20px rgba(255, 140, 0, 0.5);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .section {
+            margin-bottom: 40px;
+            padding: 0 40px;
+        }
+
+        .section-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #fff;
+        }
+
+        .carousel {
+            display: flex;
+            gap: 20px;
+            overflow-x: auto;
+            scroll-behavior: smooth;
+            padding-bottom: 10px;
+        }
+
+        .carousel::-webkit-scrollbar {
+            height: 8px;
+        }
+
+        .carousel::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+
+        .carousel::-webkit-scrollbar-thumb {
+            background: #ff8c00;
+            border-radius: 4px;
+        }
+
+        .media-card {
+            flex: 0 0 160px;
+            height: 240px;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .media-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 40px rgba(255, 140, 0, 0.2);
+        }
+
+        .media-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .media-card-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.8) 100%);
+            display: flex;
+            align-items: flex-end;
+            padding: 12px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .media-card:hover .media-card-overlay {
+            opacity: 1;
+        }
+
+        .media-card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .settings-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .settings-modal.show {
+            display: flex;
+        }
+
+        .settings-content {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 140, 0, 0.2);
+        }
+
+        .settings-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 30px;
+            color: #ff8c00;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #e5e5e5;
+        }
+
+        .form-input,
+        .form-select {
+            width: 100%;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 140, 0, 0.2);
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .form-input:focus,
+        .form-select:focus {
+            outline: none;
+            border-color: #ff8c00;
+            box-shadow: 0 0 10px rgba(255, 140, 0, 0.2);
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            accent-color: #ff8c00;
+        }
+
+        .settings-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        .settings-buttons button {
+            flex: 1;
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .alert-success {
+            background: rgba(0, 200, 100, 0.1);
+            border: 1px solid rgba(0, 200, 100, 0.3);
+            color: #00c864;
+        }
+
+        .alert-error {
+            background: rgba(255, 68, 68, 0.1);
+            border: 1px solid rgba(255, 68, 68, 0.3);
+            color: #ff4444;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #888;
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        .empty-state-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        /* Media Modal Styles */
+        .media-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 3000;
+            align-items: center;
+            justify-content: center;
+            overflow-y: auto;
+        }
+
+        .media-modal.show {
+            display: flex;
+        }
+
+        .media-modal-content {
+            background: #1a1a1a;
+            border-radius: 12px;
+            max-width: 900px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 140, 0, 0.2);
+            position: relative;
+        }
+
+        .media-modal-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: #fff;
+            font-size: 24px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s;
+            z-index: 10;
+        }
+
+        .media-modal-close:hover {
+            background: rgba(255, 140, 0, 0.3);
+        }
+
+        .media-modal-hero {
+            position: relative;
+            height: 400px;
+            background-size: cover;
+            background-position: center;
+            border-radius: 12px 12px 0 0;
+        }
+
+        .media-modal-hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(180deg, transparent 0%, rgba(26, 26, 26, 0.9) 80%, #1a1a1a 100%);
+        }
+
+        .media-modal-info {
+            padding: 40px;
+            position: relative;
+        }
+
+        .media-modal-title {
+            font-size: 36px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 10px;
+        }
+
+        .media-modal-meta {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+            color: #ff8c00;
+            margin-bottom: 20px;
+        }
+
+        .media-modal-description {
+            font-size: 16px;
+            line-height: 1.6;
+            color: #ccc;
+            margin-bottom: 30px;
+        }
+
+        .media-modal-section {
+            margin-bottom: 25px;
+        }
+
+        .media-modal-section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #ff8c00;
+            margin-bottom: 10px;
+        }
+
+        .media-modal-cast {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .media-cast-item {
+            padding: 8px 16px;
+            background: rgba(255, 140, 0, 0.1);
+            border: 1px solid rgba(255, 140, 0, 0.3);
+            border-radius: 20px;
+            font-size: 14px;
+            color: #e5e5e5;
+        }
+
+        .media-modal-genres {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .media-genre-item {
+            padding: 6px 14px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            font-size: 13px;
+            color: #888;
+        }
+
+        .media-modal-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        .hero-rotation {
+            transition: opacity 1s ease-in-out;
         }
     </style>
-
-    <!-- Le HTML5 shim, for IE6-8 support of HTML5 elements -->
-    <!--[if lt IE 9]>
-    <script src="https://html5shim.googlecode.com/svn/trunk/html5.js"></script>
-    <![endif]-->
-
-    <!-- Le fav and touch icons -->
-    <link rel="shortcut icon" href="assets/ico/favicon.ico">
-    <link rel="apple-touch-icon-precomposed" sizes="144x144" href="assets/ico/apple-touch-icon-144-precomposed.png">
-    <link rel="apple-touch-icon-precomposed" sizes="114x114" href="assets/ico/apple-touch-icon-114-precomposed.png">
-    <link rel="apple-touch-icon-precomposed" sizes="72x72" href="assets/ico/apple-touch-icon-72-precomposed.png">
-    <link rel="apple-touch-icon-precomposed" href="assets/ico/apple-touch-icon-57-precomposed.png">
-
-    <!-- Google Fonts call. Font Used Open Sans -->
-    <link href="https://fonts.googleapis.com/css?family=Open+Sans" rel="stylesheet" type="text/css">
-
-    <!-- DataTables Initialization -->
-    <script type="text/javascript" src="assets/js/datatables/jquery.dataTables.js"></script>
-    <script type="text/javascript" charset="utf-8">
-        $(document).ready(function() {
-            // DataTables disabled due to dynamic column visibility
-            // Table works fine with native HTML sorting via CSS
-        } );
-    </script>
-
-
 </head>
 <body>
-
-<!-- NAVIGATION MENU -->
-
-<div class="navbar-nav navbar-inverse navbar-fixed-top">
-    <div class="container">
-        <div class="navbar-header">
-            <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
-                <span class="icon-bar">1</span>
-                <span class="icon-bar">2</span>
-                <span class="icon-bar">3</span>
-            </button>
-            <a class="navbar-brand" href="<?=basename(__FILE__);?>"><img src="assets/img/logo30.png" alt=""><?=$name;?>'s Plex Library</a>
-            <a class="btn btnnew" style="margin-left:10px" href="#settingsModal" data-toggle="modal">Settings</a>
+    <!-- HERO SECTION -->
+    <?php if (!empty($heroItems)): ?>
+    <div id="heroSection" class="hero hero-rotation">
+        <div class="hero-bg"></div>
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+            <h1 class="hero-title" id="heroTitle"></h1>
+            <div class="hero-meta">
+                <span id="heroYear"></span>
+                <span id="heroRating"></span>
+            </div>
+            <p class="hero-description" id="heroDescription"></p>
+            <div class="hero-buttons">
+                <button class="btn btn-primary">▶ Play</button>
+                <button class="btn btn-secondary" onclick="showMediaDetails(currentHeroIndex)">ℹ More Info</button>
+            </div>
         </div>
     </div>
-</div>
+    <script>
+        const heroItems = <?php echo json_encode($heroItems); ?>;
+        let currentHeroIndex = 0;
+        
+        function updateHero(index) {
+            const item = heroItems[index];
+            const heroSection = document.getElementById('heroSection');
+            
+            // Fade out
+            heroSection.style.opacity = '0.5';
+            
+            setTimeout(() => {
+                // Update background
+                const bgUrl = '<?php echo $http . "://" . $host; ?>/photo/:/transcode?url=' + encodeURIComponent(item.art || item.thumb) + '&width=1920&height=1080&X-Plex-Token=<?php echo $token; ?>';
+                heroSection.style.backgroundImage = 'url(' + bgUrl + ')';
+                
+                // Update content
+                document.getElementById('heroTitle').textContent = item.title;
+                document.getElementById('heroYear').textContent = item.year || '';
+                document.getElementById('heroRating').textContent = item.contentRating || '';
+                document.getElementById('heroDescription').textContent = (item.summary || '').substring(0, 200) + '...';
+                
+                // Fade in
+                heroSection.style.opacity = '1';
+            }, 500);
+        }
+        
+        // Initialize first hero
+        updateHero(0);
+        
+        // Rotate hero every 8 seconds
+        setInterval(() => {
+            currentHeroIndex = (currentHeroIndex + 1) % heroItems.length;
+            updateHero(currentHeroIndex);
+        }, 8000);
+    </script>
+    <?php endif; ?>
 
-<div class="container">
-    <?php if (!empty($_SESSION['settings_message'])) { $cls = ($_SESSION['settings_status'] === 'success') ? 'alert-success' : 'alert-danger'; ?>
-    <div class="alert <?=$cls?>" style="margin-top:10px"><?=htmlspecialchars($_SESSION['settings_message'])?></div>
-    <?php unset($_SESSION['settings_message'], $_SESSION['settings_status']); } ?>
+    <!-- MAIN CONTENT -->
+    <div class="content">
+        <!-- Alert Messages -->
+        <?php if (!empty($_SESSION['settings_message'])) { 
+            $cls = ($_SESSION['settings_status'] === 'success') ? 'alert-success' : 'alert-error';
+        ?>
+        <div id="alertMessage" style="padding: 0 40px; margin-bottom: 20px;">
+            <div class="alert <?php echo $cls; ?>">
+                <?php echo htmlspecialchars($_SESSION['settings_message']); ?>
+                <button onclick="dismissAlert()" style="float: right; background: none; border: none; color: inherit; font-size: 20px; cursor: pointer; padding: 0 5px; opacity: 0.7;">&times;</button>
+            </div>
+        </div>
+        <script>
+            // Auto-dismiss alert after 3 seconds
+            setTimeout(() => {
+                const alert = document.getElementById('alertMessage');
+                if (alert) {
+                    alert.style.transition = 'opacity 0.5s';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.remove(), 500);
+                }
+            }, 3000);
+            
+            function dismissAlert() {
+                const alert = document.getElementById('alertMessage');
+                if (alert) {
+                    alert.style.transition = 'opacity 0.3s';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.remove(), 300);
+                }
+            }
+        </script>
+        <?php unset($_SESSION['settings_message'], $_SESSION['settings_status']); } ?>
 
-    <div class="row">
-        <div class="col-sm-12 col-lg-12">
-            <h4><?php if($type == "movie"){ echo "Movies | <a href='?act=$act&type=tv' class='xphunk-link'>TV Shows</a>"; }else{ echo "<a href='?act=$act&type=movie' class='xphunk-link'>Movies</a> | TV Shows"; } ?> </h4>
-            <h4><strong><?=$title;?> </strong></h4>
-            <?php foreach ($actarray[0] as $action) {
-                $linktitle = $actarray[1][array_search($action, $actarray[0])];
-                echo '<h4 class="switch-link"><strong><a href="?act='.$action.'&type='.$type.'" class="xphunk-link">Switch to '.ucfirst($linktitle).'</a></strong></h4>';
-            }?>
+        <!-- HOME VIEW -->
+        <div id="homeView" class="view-container">
+            <!-- Top 20 Recently Added from All Libraries -->
+            <?php if (!empty($top20Recent)) { ?>
+            <div class="section">
+                <h2 class="section-title">Top 20 Recently Added</h2>
+                <div class="carousel">
+                    <?php foreach ($top20Recent as $media) { ?>
+                    <div class="media-card" onclick='showMediaModal(<?php echo json_encode($media); ?>)'>
+                        <img src="<?php echo getImageUrl($media['thumb']); ?>" alt="<?php echo htmlspecialchars($media['title']); ?>">
+                        <div class="media-card-overlay">
+                            <div class="media-card-title"><?php echo htmlspecialchars($media['title']); ?></div>
+                        </div>
+                    </div>
+                    <?php } ?>
+                </div>
+            </div>
+            <?php } ?>
 
-
-            <table class="display" id="dt1">
-                <thead>
-                <tr>
-                    <th>Poster</th>
-                    <th><?=substr($typeselect, 0, -1);?> Name</th>
-                    <th style="<?=($type == "movie") ? 'display:none;' : '';?>">Episode Name</th>
-                    <th>Quality</th>
-                    <th>Release Date</th>
-                    <th>Rating</th>
-                    <th>Content Rating</th>
-                </tr>
-                </thead>
-                <tbody>
-
-                <!-- CONTENT -->
-                <?php if ($achxml && isset($achxml->$parent)) { foreach($achxml->$parent AS $child) {
-                    // Handle different XML structures: Directory (TV all) vs Video (episodes/movies)
-                    $isDirectory = ($act == "all" && $type == "tv");
-                    $modalId = $isDirectory ? $child['ratingKey'] : $child->Media['id'];
-                    $trueimage = $isDirectory ? $child['thumb'] : (($type == "movie") ? $child['thumb'] : $child['grandparentThumb']);
-                    $showTitle = $isDirectory ? $child['title'] : (($type == "tv") ? $child['grandparentTitle'] : $child['title']);
-                    $episodeTitle = ($type == "tv" && !$isDirectory) ? $child['title'] : '';
-                    $videoRes = $isDirectory ? 'N/A' : strtoupper($child->Media['videoResolution']);
-                    
-                    echo '<tr class="gradeA">';
-                    echo '<td><center><a href="#myModal'.$modalId.'" data-toggle="modal"><img src="'.$imgurl.$trueimage.$imgurlend.'"></a></center></td>';
-                    echo '<td>'.$showTitle.'</td>';
-                    echo '<td style="'.($type == "movie" ? 'display:none;' : '').'">'.htmlspecialchars($episodeTitle).'</td>';
-                    echo '<td>'.$videoRes.'</td>';
-                    echo '<td>'.$child['originallyAvailableAt'].'</td>';
-                    echo '<td>'.$child['rating'].'</td>';
-                    echo '<td>'.$child['contentRating'].'</td>';
-                    echo '</tr>';
-                } } else { echo '<tr><td colspan="7" style="text-align:center">Configure your Plex server in Settings to load data.</td></tr>'; }?>
-
-                </tbody>
-            </table><!--/END SECOND TABLE -->
-            <?php if ($achxml && isset($achxml->$parent)) { foreach($achxml->$parent AS $child) {
-                $isDirectory = ($act == "all" && $type == "tv");
-                $modalId = $isDirectory ? $child['ratingKey'] : $child->Media['id'];
+            <!-- All Selected Library Sections -->
+            <?php if (!empty($mediaData)) { 
+                foreach ($mediaData as $libKey => $lib) {
             ?>
-                <div class="modal fade" id="myModal<?=$modalId;?>" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true" style="display: none;">
-                    <div class="modal-dialog">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">X</button>
-                                <h4 class="modal-title"><?=$child['title'];?></h4>
-                            </div>
-                            <div class="modal-body">
-                                <div class="row">
-                                    <div class="col-lg-5">
-                                        <div class="cont3">
-                                            <img src="<?=$imgurl.$child['thumb'].$imgurlendhq;?>">
-                                        </div>
-                                    </div>
-                                    <div class="col-lg-7">
-                                        <div class="cont3">
-                                            <?php if(!$child['tagline']){ echo "<h6>".$child['summary']."</h6>";
-                                            }else{ echo "<h4><strong>".$child['tagline']."</strong></h4><h6>".$child['summary']."</h6>";}?>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="modal-footer">
-                                <div class="row">
-                                    <div class="col-lg-3">
-                                        <div class="cont3">
-                                            <?php if($child->Media['container']){ echo "<p><ok>Containter:</ok><pre><center>".$child->Media['container']."</center></pre></p>";}?>
-                                            <?php if($child->Media['duration']){ echo "<p><ok>Duration:</ok><pre><center>".$child->Media['duration']."</center></pre></p>";}?>
-                                            <?php if($child->Media['videoFrameRate']){ echo "<p><ok>Framerate:</ok><pre><center>".$child->Media['videoFrameRate']."</center></pre></p>";}?>
-                                            <?php //if($child['addedAt']){ echo "<p><ok>Date Added:</ok><pre><center>".date('M/d/Y', $child['addedAt']/1000)."</center></pre></p>";}?>
-                                            <?php if($child['viewCount']){ echo "<p><ok>Times Played:</ok><pre><center>".$child['viewCount']."</center></pre></p>";}?>
-
-
-                                        </div>
-                                    </div>
-                                    <div class="col-lg-3">
-                                        <div class="cont3">
-                                            <?php if($child->Media['width']){ echo "<p><ok>Width:</ok><pre><center>".$child->Media['width']."</center></pre></p>";}?>
-                                            <?php if($child->Media['height']){ echo "<p><ok>Height:</ok><pre><center>".$child->Media['height']."</center></pre></p>";}?>
-                                            <?php if($child->Media['aspectRatio']){ echo "<p><ok>Aspect Ratio:</ok><pre><center>".$child->Media['aspectRatio']."</center></pre></p>";}?>
-                                            <?php if($child->Media['videoCodec']){ echo "<p><ok>Video Codec:</ok><pre><center>".$child->Media['videoCodec']."</center></pre></p>";}?>
-
-                                        </div>
-                                    </div>
-                                    <div class="col-lg-3">
-                                        <div class="cont3">
-                                            <?php if($child->Media['audioChannels']){ echo "<p><ok>Audio Channels:</ok><pre><center>".$child->Media['audioChannels']."</center></pre></p>";}?>
-                                            <?php if($child->Media['audioCodec']){ echo "<p><ok>Audio Codec:</ok><pre><center>".$child->Media['audioCodec']."</center></pre></p>";}?>
-                                            <?php if($child->Media['audioProfile']){ echo "<p><ok>Audio Profile:</ok><pre><center>".$child->Media['audioProfile']."</center></pre></p>";}?>
-
-                                        </div>
-                                    </div>
-                                    <div class="col-lg-3">
-                                        <div class="cont3">
-                                            <p><ok>Genre(s):</ok><?php foreach ($child->Genre AS $genre){ echo "<pre word-break='break-word'><center>".$genre['tag']."</center></pre>";}?></p>
-
-
-
-
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
-                            </div>
-                        </div><!-- /.modal-content -->
-                    </div><!-- /.modal-dialog -->
+            <div class="section">
+                <h2 class="section-title">Recently Added <?php echo htmlspecialchars($lib['title']); ?></h2>
+                <div class="carousel">
+                    <?php foreach ($lib['items'] as $idx => $media) { ?>
+                    <div class="media-card" onclick='showMediaModal(<?php echo json_encode($media); ?>)'>
+                        <img src="<?php echo getImageUrl($media['thumb']); ?>" alt="<?php echo htmlspecialchars($media['title']); ?>">
+                        <div class="media-card-overlay">
+                            <div class="media-card-title"><?php echo htmlspecialchars($media['title']); ?></div>
+                        </div>
+                    </div>
+                    <?php } ?>
                 </div>
+            </div>
             <?php } } ?>
+        </div>
 
-        </div><!--/span12 -->
-    </div><!-- /row -->
+        <!-- MOVIES VIEW -->
+        <div id="moviesView" class="view-container" style="display: none;">
+            <?php if (!empty($movieLibraries)) { 
+                foreach ($movieLibraries as $libKey => $lib) {
+            ?>
+            <div class="section">
+                <h2 class="section-title"><?php echo htmlspecialchars($lib['title']); ?></h2>
+                <div class="carousel">
+                    <?php foreach ($lib['items'] as $media) { ?>
+                    <div class="media-card" onclick='showMediaModal(<?php echo json_encode($media); ?>)'>
+                        <img src="<?php echo getImageUrl($media['thumb']); ?>" alt="<?php echo htmlspecialchars($media['title']); ?>">
+                        <div class="media-card-overlay">
+                            <div class="media-card-title"><?php echo htmlspecialchars($media['title']); ?></div>
+                        </div>
+                    </div>
+                    <?php } ?>
+                </div>
+            </div>
+            <?php } } else { ?>
+            <div class="empty-state">
+                <div class="empty-state-icon">🎬</div>
+                <div class="empty-state-title">No Movie Libraries</div>
+                <p>No movie libraries selected or available</p>
+            </div>
+            <?php } ?>
+        </div>
 
-</div> <!-- /container -->
-<br>
+        <!-- TV VIEW -->
+        <div id="tvView" class="view-container" style="display: none;">
+            <?php if (!empty($tvLibraries)) { 
+                foreach ($tvLibraries as $libKey => $lib) {
+            ?>
+            <div class="section">
+                <h2 class="section-title"><?php echo htmlspecialchars($lib['title']); ?></h2>
+                <div class="carousel">
+                    <?php foreach ($lib['items'] as $media) { ?>
+                    <div class="media-card" onclick='showMediaModal(<?php echo json_encode($media); ?>)'>
+                        <img src="<?php echo getImageUrl($media['thumb']); ?>" alt="<?php echo htmlspecialchars($media['title']); ?>">
+                        <div class="media-card-overlay">
+                            <div class="media-card-title"><?php echo htmlspecialchars($media['title']); ?></div>
+                        </div>
+                    </div>
+                    <?php } ?>
+                </div>
+            </div>
+            <?php } } else { ?>
+            <div class="empty-state">
+                <div class="empty-state-icon">📺</div>
+                <div class="empty-state-title">No TV Libraries</div>
+                <p>No TV libraries selected or available</p>
+            </div>
+            <?php } ?>
+        </div>
 
-<br>
-<?php if (empty($host) || empty($token)) { ?>
-<div class="container">
-    <div class="alert alert-warning" style="margin-top:10px">Plex server is not configured. Open <a href="#settingsModal" data-toggle="modal">Settings</a> to add your server details.</div>
+        <!-- MUSIC VIEW -->
+        <div id="musicView" class="view-container" style="display: none;">
+            <?php if (!empty($musicLibraries)) { 
+                foreach ($musicLibraries as $libKey => $lib) {
+            ?>
+            <div class="section">
+                <h2 class="section-title"><?php echo htmlspecialchars($lib['title']); ?></h2>
+                <div class="carousel">
+                    <?php foreach ($lib['items'] as $media) { ?>
+                    <div class="media-card" onclick='showMediaModal(<?php echo json_encode($media); ?>)'>
+                        <img src="<?php echo getImageUrl($media['thumb']); ?>" alt="<?php echo htmlspecialchars($media['title']); ?>">
+                        <div class="media-card-overlay">
+                            <div class="media-card-title"><?php echo htmlspecialchars($media['title']); ?></div>
+                        </div>
+                    </div>
+                    <?php } ?>
+                </div>
+            </div>
+            <?php } } else { ?>
+            <div class="empty-state">
+                <div class="empty-state-icon">🎵</div>
+                <div class="empty-state-title">No Music Libraries</div>
+                <p>No music libraries selected or available</p>
+            </div>
+            <?php } ?>
+        </div>
+
+        <!-- PHOTOS VIEW -->
+        <div id="photosView" class="view-container" style="display: none;">
+            <?php if (!empty($photoLibraries)) { 
+                foreach ($photoLibraries as $libKey => $lib) {
+            ?>
+            <div class="section">
+                <h2 class="section-title"><?php echo htmlspecialchars($lib['title']); ?></h2>
+                <div class="carousel">
+                    <?php foreach ($lib['items'] as $media) { ?>
+                    <div class="media-card" onclick='showMediaModal(<?php echo json_encode($media); ?>)'>
+                        <img src="<?php echo getImageUrl($media['thumb']); ?>" alt="<?php echo htmlspecialchars($media['title']); ?>">
+                        <div class="media-card-overlay">
+                            <div class="media-card-title"><?php echo htmlspecialchars($media['title']); ?></div>
+                        </div>
+                    </div>
+                    <?php } ?>
+                </div>
+            </div>
+            <?php } } else { ?>
+            <div class="empty-state">
+                <div class="empty-state-icon">📷</div>
+                <div class="empty-state-title">No Photo Libraries</div>
+                <p>No photo libraries selected or available</p>
+            </div>
+            <?php } ?>
+        </div>
+
+        <!-- Empty State (if no media at all) -->
+        <?php if (empty($mediaData)) { ?>
+        <div class="empty-state">
+            <div class="empty-state-icon">🎬</div>
+            <div class="empty-state-title">Configure Plex Server</div>
+            <p>Click the Settings icon to add your Plex server and select libraries</p>
+        </div>
+        <?php } ?>
     </div>
-<?php } ?>
-<!-- FOOTER -->
-<div id="footerwrap">
-    <footer class="clearfix"></footer>
-    <div class="container">
-        <div class="row">
-            <div class="col-sm-12 col-lg-12">
-                <p><img src="assets/img/logo.png" alt=""></p>
-                <p>Blocks Dashboard Theme - Crafted With Love - Copyright 2013</p>
-            </div>
 
-        </div><!-- /row -->
-    </div><!-- /container -->
-</div><!-- /footerwrap -->
+    <!-- BOTTOM NAVIGATION -->
+    <div class="navbar">
+        <a class="nav-item active" onclick="switchView('home')" data-view="home">
+            <span class="nav-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                    <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                </svg>
+            </span>
+            <span>Home</span>
+        </a>
+        <a class="nav-item" onclick="switchView('movies')" data-view="movies">
+            <span class="nav-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
+                    <polyline points="17 2 12 7 7 2"></polyline>
+                </svg>
+            </span>
+            <span>Movies</span>
+        </a>
+        <a class="nav-item" onclick="switchView('tv')" data-view="tv">
+            <span class="nav-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
+                    <polyline points="17 2 12 7 7 2"></polyline>
+                </svg>
+            </span>
+            <span>TV</span>
+        </a>
+        <a class="nav-item" onclick="switchView('music')" data-view="music">
+            <span class="nav-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 18V5l12-2v13"></path>
+                    <circle cx="6" cy="18" r="3"></circle>
+                    <circle cx="18" cy="16" r="3"></circle>
+                </svg>
+            </span>
+            <span>Music</span>
+        </a>
+        <a class="nav-item" onclick="switchView('photos')" data-view="photos">
+            <span class="nav-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+            </span>
+            <span>Photos</span>
+        </a>
+        <a class="nav-item" onclick="openSettings()">
+            <span class="nav-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M12 1v6m0 6v6m4.22-13.78l-4.24 4.24m-3.96 3.96l-4.24 4.24M23 12h-6m-6 0H1m17.78 4.22l-4.24-4.24m-3.96-3.96l-4.24-4.24"></path>
+                </svg>
+            </span>
+            <span>Settings</span>
+        </a>
+    </div>
 
+    <!-- SETTINGS MODAL -->
+    <div id="settingsModal" class="settings-modal">
+        <div class="settings-content">
+            <h2 class="settings-title">Settings</h2>
+            
+            <form method="POST">
+                <div class="form-group">
+                    <label class="form-label">Plex Server Host</label>
+                    <input type="text" class="form-input" name="host" placeholder="192.168.1.100:32400" value="<?php echo htmlspecialchars($host); ?>">
+                </div>
 
-<!-- Le javascript
-================================================== -->
-<!-- Placed at the end of the document so the pages load faster -->
-<script type="text/javascript" src="assets/js/bootstrap.js"></script>
-<script type="text/javascript" src="assets/js/admin.js"></script>
+                <div class="form-group">
+                    <label class="form-label">Plex Token</label>
+                    <input type="text" class="form-input" name="token" placeholder="Your Plex token" value="<?php echo htmlspecialchars($token); ?>">
+                </div>
 
-<!-- Settings Modal -->
-<div class="modal fade" id="settingsModal" tabindex="-1" role="dialog" aria-labelledby="settingsLabel" aria-hidden="true" style="display: none;">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">X</button>
-                <h4 class="modal-title" id="settingsLabel">Settings</h4>
-            </div>
-            <form method="post">
-            <div class="modal-body">
                 <div class="form-group">
-                    <label>Display Name</label>
-                    <input type="text" name="name" class="form-control" value="<?=htmlspecialchars($name)?>" />
+                    <label class="form-label">Use HTTPS</label>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="useSSL" name="useSSL" value="1" <?php echo $useSSL ? 'checked' : ''; ?>>
+                        <label for="useSSL" style="margin: 0; cursor: pointer;">Enable SSL/HTTPS</label>
+                    </div>
                 </div>
+
+                <?php if (!empty($allLibraries)) { ?>
                 <div class="form-group">
-                    <label>Use SSL (HTTPS)</label>
-                    <select name="useSSL" class="form-control">
-                        <option value="1" <?=($useSSL ? 'selected' : '')?>>Yes</option>
-                        <option value="0" <?=(!$useSSL ? 'selected' : '')?>>No</option>
-                    </select>
+                    <label class="form-label">Select Libraries to Display</label>
+                    <?php foreach ($allLibraries as $lib) { ?>
+                    <div class="checkbox-group" style="margin-bottom: 10px;">
+                        <input type="checkbox" id="lib_<?php echo htmlspecialchars($lib['key']); ?>" name="selectedLibraries[]" value="<?php echo htmlspecialchars($lib['key']); ?>" <?php echo in_array($lib['key'], $selectedLibraries) ? 'checked' : ''; ?>>
+                        <label for="lib_<?php echo htmlspecialchars($lib['key']); ?>" style="margin: 0; cursor: pointer;">
+                            <?php echo htmlspecialchars($lib['title']); ?> (<?php echo htmlspecialchars($lib['type']); ?>)
+                        </label>
+                    </div>
+                    <?php } ?>
                 </div>
+                <?php } else if (!empty($host) && !empty($token)) { ?>
                 <div class="form-group">
-                    <label>Plex Host (e.g. 192.168.1.10:32400)</label>
-                    <input type="text" name="host" class="form-control" value="<?=htmlspecialchars($host)?>" />
+                    <label class="form-label">Libraries</label>
+                    <p style="color: #888; font-size: 13px;">Connect to Plex and save to select libraries</p>
                 </div>
-                <div class="form-group">
-                    <label>Plex Token</label>
-                    <input type="text" name="token" class="form-control" value="<?=htmlspecialchars($token)?>" />
+                <?php } ?>
+
+                <div class="settings-buttons">
+                    <button type="submit" name="settings_submit" value="1" class="btn btn-primary">Save Settings</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeSettings()">Close</button>
                 </div>
-                <div class="form-group">
-                    <label>Movies Section ID</label>
-                    <input type="text" name="movies" class="form-control" value="<?=htmlspecialchars($movies)?>" />
-                </div>
-                <div class="form-group">
-                    <label>TV Section ID</label>
-                    <input type="text" name="tv" class="form-control" value="<?=htmlspecialchars($tv)?>" />
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
-                <button type="submit" name="settings_submit" value="1" class="btn btn-primary">Save Settings</button>
-            </div>
             </form>
         </div>
     </div>
-</div>
 
+    <!-- MEDIA DETAIL MODAL -->
+    <div id="mediaModal" class="media-modal">
+        <div class="media-modal-content">
+            <button class="media-modal-close" onclick="closeMediaModal()">×</button>
+            <div id="mediaModalHero" class="media-modal-hero"></div>
+            <div class="media-modal-info">
+                <h1 class="media-modal-title" id="modalTitle"></h1>
+                <div class="media-modal-meta">
+                    <span id="modalYear"></span>
+                    <span id="modalRating"></span>
+                    <span id="modalContentRating"></span>
+                    <span id="modalDuration"></span>
+                </div>
+                <p class="media-modal-description" id="modalDescription"></p>
+                
+                <div class="media-modal-section" id="modalGenresSection">
+                    <div class="media-modal-section-title">Genres</div>
+                    <div class="media-modal-genres" id="modalGenres"></div>
+                </div>
+                
+                <div class="media-modal-section" id="modalCastSection">
+                    <div class="media-modal-section-title">Cast</div>
+                    <div class="media-modal-cast" id="modalCast"></div>
+                </div>
+                
+                <div class="media-modal-buttons">
+                    <button class="btn btn-primary">▶ Play</button>
+                    <button class="btn btn-secondary" id="trailerBtn">🎬 Trailer</button>
+                    <button class="btn btn-secondary">+ Add to List</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
-</body></html>
+    <script>
+        function showMediaModal(media) {
+            const modal = document.getElementById('mediaModal');
+            
+            // Update hero background
+            const bgUrl = '<?php echo $http . "://" . $host; ?>/photo/:/transcode?url=' + encodeURIComponent(media.art || media.thumb) + '&width=1920&height=1080&X-Plex-Token=<?php echo $token; ?>';
+            document.getElementById('mediaModalHero').style.backgroundImage = 'url(' + bgUrl + ')';
+            
+            // Update content
+            document.getElementById('modalTitle').textContent = media.title;
+            document.getElementById('modalYear').textContent = media.year || '';
+            document.getElementById('modalRating').textContent = media.rating ? '⭐ ' + parseFloat(media.rating).toFixed(1) : '';
+            document.getElementById('modalContentRating').textContent = media.contentRating || '';
+            
+            // Format duration
+            if (media.duration) {
+                const minutes = Math.floor(media.duration / 60000);
+                const hours = Math.floor(minutes / 60);
+                const mins = minutes % 60;
+                document.getElementById('modalDuration').textContent = hours > 0 ? hours + 'h ' + mins + 'm' : mins + 'm';
+            } else {
+                document.getElementById('modalDuration').textContent = '';
+            }
+            
+            document.getElementById('modalDescription').textContent = media.summary || 'No description available.';
+            
+            // Update genres
+            const genresDiv = document.getElementById('modalGenres');
+            genresDiv.innerHTML = '';
+            if (media.genres && media.genres.length > 0) {
+                media.genres.forEach(genre => {
+                    const span = document.createElement('span');
+                    span.className = 'media-genre-item';
+                    span.textContent = genre;
+                    genresDiv.appendChild(span);
+                });
+                document.getElementById('modalGenresSection').style.display = 'block';
+            } else {
+                document.getElementById('modalGenresSection').style.display = 'none';
+            }
+            
+            // Update cast
+            const castDiv = document.getElementById('modalCast');
+            castDiv.innerHTML = '';
+            if (media.cast && media.cast.length > 0) {
+                media.cast.forEach(actor => {
+                    const span = document.createElement('span');
+                    span.className = 'media-cast-item';
+                    span.textContent = actor;
+                    castDiv.appendChild(span);
+                });
+                document.getElementById('modalCastSection').style.display = 'block';
+            } else {
+                document.getElementById('modalCastSection').style.display = 'none';
+            }
+            
+            // Trailer button (search YouTube)
+            const trailerBtn = document.getElementById('trailerBtn');
+            trailerBtn.onclick = () => {
+                const searchQuery = encodeURIComponent(media.title + ' ' + (media.year || '') + ' trailer');
+                window.open('https://www.youtube.com/results?search_query=' + searchQuery, '_blank');
+            };
+            
+            modal.classList.add('show');
+        }
+        
+        function closeMediaModal() {
+            document.getElementById('mediaModal').classList.remove('show');
+        }
+        
+        function showMediaDetails(heroIndex) {
+            if (heroItems && heroItems[heroIndex]) {
+                showMediaModal(heroItems[heroIndex]);
+            }
+        }
+        
+        // Close modal when clicking outside
+        document.getElementById('mediaModal').addEventListener('click', (e) => {
+            if (e.target.id === 'mediaModal') closeMediaModal();
+        });
+
+        function openSettings() {
+            document.getElementById('settingsModal').classList.add('show');
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.remove('show');
+        }
+
+        function switchView(viewName) {
+            // Hide all views
+            const views = ['homeView', 'moviesView', 'tvView', 'musicView', 'photosView'];
+            views.forEach(v => {
+                document.getElementById(v).style.display = 'none';
+            });
+            
+            // Show selected view
+            document.getElementById(viewName + 'View').style.display = 'block';
+            
+            // Update active nav item
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelector('.nav-item[data-view="' + viewName + '"]').classList.add('active');
+            
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        document.getElementById('settingsModal').addEventListener('click', (e) => {
+            if (e.target.id === 'settingsModal') closeSettings();
+        });
+
+        // Smooth scrolling for nav items
+        document.querySelectorAll('.nav-item[href^="#"]').forEach(link => {
+            link.addEventListener('click', (e) => {
+                const target = document.querySelector(e.target.closest('.nav-item').getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

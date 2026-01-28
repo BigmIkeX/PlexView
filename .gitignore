@@ -45,3 +45,7 @@ $RECYCLE.BIN/
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Plex Configuration (contains sensitive data)
+assets/config/config.json
+*.bak
