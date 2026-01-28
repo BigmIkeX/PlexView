@@ -1789,10 +1789,10 @@ function getHeroImageUrl($thumb) {
                 </div>
                 
                 <div class="media-modal-buttons">
-                    <button class="btn btn-primary">▶ Play</button>
+                    <button class="btn btn-primary" id="playBtn">▶ Play</button>
                     <button class="btn btn-secondary" id="trailerBtn">🎬 Trailer</button>
                     <button class="btn btn-secondary" id="requestBtn" style="display: none;">📋 Request</button>
-                    <button class="btn btn-secondary">+ Add to List</button>
+                    <div id="availableBadge" style="display: none; padding: 8px 16px; background: #28a745; color: white; border-radius: 4px; font-weight: bold; text-align: center;">✅ Available</div>
                 </div>
             </div>
         </div>
@@ -1845,7 +1845,9 @@ function getHeroImageUrl($thumb) {
             if (media.cast && media.cast.length > 0) {
                 media.cast.forEach((actor, idx) => {
                     const div = document.createElement('div');
-                    div.style.cssText = 'text-align: center;';
+                    div.style.cssText = 'text-align: center; cursor: pointer; transition: transform 0.2s;';
+                    div.onmouseover = () => div.style.transform = 'scale(1.05)';
+                    div.onmouseout = () => div.style.transform = 'scale(1)';
                     
                     // Create a placeholder image with actor initial
                     const initial = actor.charAt(0).toUpperCase();
@@ -1857,8 +1859,14 @@ function getHeroImageUrl($thumb) {
                     img.textContent = initial;
                     
                     const name = document.createElement('div');
-                    name.style.cssText = 'font-size: 12px; color: #ccc; word-break: break-word; overflow: hidden; text-overflow: ellipsis;';
+                    name.style.cssText = 'font-size: 12px; color: #00bfff; word-break: break-word; overflow: hidden; text-overflow: ellipsis; cursor: pointer; text-decoration: underline;';
                     name.textContent = actor;
+                    
+                    // Click to search for actor
+                    div.onclick = () => {
+                        const searchQuery = encodeURIComponent(actor + ' filmography');
+                        window.open('https://www.imdb.com/find?q=' + searchQuery, '_blank');
+                    };
                     
                     div.appendChild(img);
                     div.appendChild(name);
@@ -1869,6 +1877,15 @@ function getHeroImageUrl($thumb) {
                 document.getElementById('modalCastSection').style.display = 'none';
             }
             
+            // Play button (redirect to Plex)
+            const playBtn = document.getElementById('playBtn');
+            playBtn.onclick = () => {
+                if (media.ratingKey) {
+                    const plexUrl = '<?php echo $http . "://" . $host; ?>/web/index.html#!/server/<?php echo $host; ?>/details?key=/library/metadata/' + media.ratingKey;
+                    window.location.href = plexUrl;
+                }
+            };
+            
             // Trailer button (search YouTube)
             const trailerBtn = document.getElementById('trailerBtn');
             trailerBtn.onclick = () => {
@@ -1877,10 +1894,12 @@ function getHeroImageUrl($thumb) {
             };
             
             // Request button (Overseerr)
-            const requestBtn = document.getElementById('requestBtn');
             const overseerrEnabledForRequest = <?php echo $overseerrEnabled ? 'true' : 'false'; ?>;
+            const requestBtn = document.getElementById('requestBtn');
+            const availableBadge = document.getElementById('availableBadge');
             if (overseerrEnabledForRequest) {
                 requestBtn.style.display = 'block';
+                availableBadge.style.display = 'none';
                 requestBtn.onclick = () => {
                     requestBtn.disabled = true;
                     requestBtn.textContent = '⏳ Requesting...';
@@ -1936,6 +1955,12 @@ function getHeroImageUrl($thumb) {
                             const statusText = (statusEmoji[data.status] || '❓') + ' ' + 
                                 data.status.charAt(0).toUpperCase() + data.status.slice(1);
                             document.getElementById('overseerrStatusText').textContent = statusText;
+                            
+                            // Disable request button and show available badge if media is available
+                            if (data.status === 'available') {
+                                requestBtn.style.display = 'none';
+                                availableBadge.style.display = 'block';
+                            }
                             
                             // Request details
                             document.getElementById('overseerrRequestCount').textContent = data.requestCount || 0;
