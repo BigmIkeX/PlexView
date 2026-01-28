@@ -251,6 +251,49 @@ function searchOverseerrMedia($title, $mediaType, $overseerrHost, $overseerrToke
     return null;
 }
 
+// Helper function: Fetch trending media from Overseerr
+function getTrendingFromOverseerr($overseerrHost, $overseerrToken) {
+    if (empty($overseerrHost) || empty($overseerrToken)) return [];
+    
+    try {
+        $url = "http://$overseerrHost/api/v1/discover/trending";
+        $headers = ["X-Api-Key: $overseerrToken"];
+        $context = stream_context_create([
+            'http' => ['header' => $headers],
+            'ssl' => ['verify_peer' => false]
+        ]);
+        $data = @file_get_contents($url, false, $context);
+        if ($data) {
+            $json = json_decode($data, true);
+            if ($json && isset($json['results']) && is_array($json['results'])) {
+                $trendingItems = [];
+                foreach ($json['results'] as $item) {
+                    // Skip if critical data is missing
+                    if (empty($item['title']) || empty($item['posterPath'])) continue;
+                    
+                    $trendingItems[] = [
+                        'title' => $item['title'] ?? '',
+                        'thumb' => !empty($item['posterPath']) ? 'https://image.tmdb.org/t/p/w342' . $item['posterPath'] : '',
+                        'art' => !empty($item['backdropPath']) ? 'https://image.tmdb.org/t/p/w1280' . $item['backdropPath'] : '',
+                        'ratingKey' => $item['id'] ?? 0,
+                        'year' => isset($item['releaseDate']) ? substr($item['releaseDate'], 0, 4) : (isset($item['firstAirDate']) ? substr($item['firstAirDate'], 0, 4) : ''),
+                        'summary' => $item['overview'] ?? '',
+                        'rating' => isset($item['voteAverage']) ? number_format($item['voteAverage'], 1) : 'N/A',
+                        'contentRating' => $item['contentRating'] ?? '',
+                        'cast' => [],
+                        'genres' => $item['genreIds'] ?? [],
+                        'type' => ($item['mediaType'] ?? 'movie') === 'tv' ? 'show' : 'movie',
+                        'tmdbId' => $item['id'] ?? null,
+                        'popularity' => $item['popularity'] ?? 0
+                    ];
+                }
+                return array_slice($trendingItems, 0, 30);
+            }
+        }
+    } catch (Exception $e) {}
+    return [];
+}
+
 // Fetch media data
 ini_set('display_errors', 0);
 error_reporting(0);
@@ -287,7 +330,12 @@ if (!empty($host) && !empty($token)) {
             }
         }
         
-        // Fetch trending data from first movie/show library
+        // Fetch trending data from Overseerr if enabled
+        if (empty($trendingMedia) && $overseerrEnabled && !empty($overseerrHost) && !empty($overseerrToken)) {
+            $trendingMedia = getTrendingFromOverseerr($overseerrHost, $overseerrToken);
+        }
+        
+        // Fallback to Plex recently added if Overseerr trending is unavailable
         if (empty($trendingMedia)) {
             foreach ($allLibraries as $lib) {
                 if (in_array($lib['type'], ['movie', 'show'])) {
