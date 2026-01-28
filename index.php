@@ -681,6 +681,11 @@ foreach ($mediaData as $lib) {
     }
 }
 
+// Create section-specific hero data
+$heroMovies = [];
+$heroTV = [];
+$heroTrending = [];
+
 // Organize media by type for different views
 $movieLibraries = [];
 $tvLibraries = [];
@@ -711,6 +716,11 @@ foreach ($mediaData as $lib) {
         if (count($top20Recent) >= 20) break 2;
     }
 }
+
+// Populate section-specific hero data
+$heroMovies = array_slice($allMovies, 0, 20);
+$heroTV = array_slice($allTV, 0, 20);
+$heroTrending = array_slice($trendingMedia, 0, 20);
 
 function getImageUrl($thumb) {
     global $http, $host, $token;
@@ -1271,9 +1281,11 @@ function getHeroImageUrl($thumb) {
     <script>
         const heroItems = <?php echo json_encode($heroItems); ?>;
         let currentHeroIndex = 0;
+        let currentHeroData = heroItems;
+        let heroRotationInterval = null;
         
         function updateHero(index) {
-            const item = heroItems[index];
+            const item = currentHeroData[index];
             const heroSection = document.getElementById('heroSection');
             
             // Fade out
@@ -1299,9 +1311,12 @@ function getHeroImageUrl($thumb) {
         updateHero(0);
         
         // Rotate hero every 8 seconds
-        setInterval(() => {
-            currentHeroIndex = (currentHeroIndex + 1) % heroItems.length;
-            updateHero(currentHeroIndex);
+        if (heroRotationInterval) clearInterval(heroRotationInterval);
+        heroRotationInterval = setInterval(() => {
+            if (currentHeroData && currentHeroData.length > 0) {
+                currentHeroIndex = (currentHeroIndex + 1) % currentHeroData.length;
+                updateHero(currentHeroIndex);
+            }
         }, 8000);
     </script>
     <?php endif; ?>
@@ -2063,6 +2078,39 @@ function getHeroImageUrl($thumb) {
                 item.classList.remove('active');
             });
             document.querySelector('.nav-item[data-view="' + viewName + '"]').classList.add('active');
+            
+            // Update hero banner based on section
+            const heroSection = document.getElementById('heroSection');
+            let heroData = heroItems; // default to home
+            let sectionTitle = 'Top 20 Recently Added';
+            
+            if (viewName === 'movies') {
+                heroData = <?php echo json_encode($heroMovies); ?>;
+                sectionTitle = '🎬 Movies';
+            } else if (viewName === 'tv') {
+                heroData = <?php echo json_encode($heroTV); ?>;
+                sectionTitle = '📺 TV Shows';
+            } else if (viewName === 'trending') {
+                heroData = <?php echo json_encode($heroTrending); ?>;
+                sectionTitle = '📈 Trending Now';
+            } else if (viewName === 'music') {
+                sectionTitle = '🎵 Music';
+                heroSection.style.display = 'none'; // Hide hero for music
+            } else if (viewName === 'photos') {
+                sectionTitle = '📷 Photos';
+                heroSection.style.display = 'none'; // Hide hero for photos
+            } else {
+                heroSection.style.display = 'block';
+                sectionTitle = '🏠 Recently Added';
+            }
+            
+            // Update hero if we have data and it should be visible
+            if (heroData && heroData.length > 0 && viewName !== 'music' && viewName !== 'photos') {
+                heroSection.style.display = 'block';
+                currentHeroIndex = 0;
+                currentHeroData = heroData;
+                updateHero(0);
+            }
             
             // Scroll to top
             window.scrollTo({ top: 0, behavior: 'smooth' });
