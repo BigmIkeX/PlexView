@@ -102,16 +102,21 @@ function getTautulliStats($key, $tautulliHost, $tautulliKey) {
     if (empty($tautulliHost) || empty($tautulliKey)) return [];
     
     try {
+        // Get library media info
         $url = "http://$tautulliHost/api/v2?apikey=$tautulliKey&cmd=get_library_media_info&section_id=$key";
         $context = stream_context_create(['ssl' => ['verify_peer' => false]]);
         $data = @file_get_contents($url, false, $context);
         if ($data) {
             $json = json_decode($data, true);
             if ($json && isset($json['response']['data'])) {
+                $libData = $json['response']['data'];
                 return [
-                    'watchCount' => $json['response']['data']['count'] ?? 0,
-                    'plays' => $json['response']['data']['plays'] ?? 0,
-                    'duration' => $json['response']['data']['duration'] ?? 0
+                    'watchCount' => $libData['count'] ?? 0,
+                    'plays' => $libData['plays'] ?? 0,
+                    'duration' => $libData['duration'] ?? 0,
+                    'userCount' => $libData['users'] ?? 0,
+                    'lastWatched' => $libData['last_accessed'] ?? 0,
+                    'totalDuration' => formatDuration($libData['duration'] ?? 0)
                 ];
             }
         }
@@ -119,7 +124,17 @@ function getTautulliStats($key, $tautulliHost, $tautulliKey) {
     return [];
 }
 
-// Helper function: Fetch Overseerr media status
+// Helper function: Format duration in seconds to readable format
+function formatDuration($seconds) {
+    $hours = floor($seconds / 3600);
+    $minutes = floor(($seconds % 3600) / 60);
+    if ($hours > 0) {
+        return $hours . 'h ' . $minutes . 'm';
+    }
+    return $minutes . 'm';
+}
+
+// Helper function: Fetch Overseerr media status with detailed info
 function getOverseerrStatus($tmdbId, $mediaType, $overseerrHost, $overseerrToken) {
     if (empty($overseerrHost) || empty($overseerrToken) || empty($tmdbId)) return [];
     
@@ -135,10 +150,33 @@ function getOverseerrStatus($tmdbId, $mediaType, $overseerrHost, $overseerrToken
         if ($data) {
             $json = json_decode($data, true);
             if ($json && isset($json['status'])) {
+                $statusMap = [1 => 'available', 2 => 'pending', 3 => 'processing'];
+                $status = $statusMap[$json['status']] ?? 'unknown';
+                
+                $requestCount = 0;
+                $lastRequester = 'Unknown';
+                $requestDate = '';
+                
+                if (isset($json['requests']) && is_array($json['requests']) && count($json['requests']) > 0) {
+                    $requestCount = count($json['requests']);
+                    $lastReq = end($json['requests']);
+                    if (isset($lastReq['requestedBy']['displayName'])) {
+                        $lastRequester = $lastReq['requestedBy']['displayName'];
+                    }
+                    if (isset($lastReq['createdAt'])) {
+                        $requestDate = date('M d, Y', strtotime($lastReq['createdAt']));
+                    }
+                }
+                
                 return [
-                    'status' => $json['status'], // 1=available, 2=pending, 3=processing
-                    'requested' => isset($json['requests']) && count($json['requests']) > 0,
-                    'available' => $json['status'] === 1
+                    'status' => $status,
+                    'available' => $status === 'available',
+                    'requested' => $requestCount > 0,
+                    'requestCount' => $requestCount,
+                    'lastRequester' => $lastRequester,
+                    'requestDate' => $requestDate,
+                    'voteScore' => isset($json['voteAverage']) ? number_format($json['voteAverage'] * 10) . '%' : 'N/A',
+                    'popularity' => isset($json['popularity']) ? number_format($json['popularity'], 1) : 'N/A'
                 ];
             }
         }
@@ -335,15 +373,21 @@ if (isset($_GET['action'])) {
     if ($_GET['action'] === 'getTautulliStats' && isset($_GET['key'])) {
         $key = $_GET['key'];
         $stats = getTautulliStats($key, $tautulliHost, $tautulliKey);
-        echo json_encode($stats ?: ['plays' => 0, 'watchCount' => 0]);
+        echo json_encode($stats ?: ['plays' => 0, 'watchCount' => 0, 'duration' => 0, 'userCount' => 0, 'lastWatched' => 0, 'totalDuration' => '0m']);
         exit;
     }
     
     if ($_GET['action'] === 'getOverseerrStatus' && isset($_GET['key']) && isset($_GET['type'])) {
         $key = $_GET['key'];
         $mediaType = $_GET['type'];
-        // For now, return placeholder - would need TMDB ID from Plex data
-        echo json_encode(['available' => true, 'requested' => false, 'status' => 'available']);
+        // Try to get TMDB ID from Plex data if available
+        $tmdbId = isset($_GET['tmdbId']) ? $_GET['tmdbId'] : '';
+        if (!empty($tmdbId)) {
+            $status = getOverseerrStatus($tmdbId, $mediaType, $overseerrHost, $overseerrToken);
+            echo json_encode($status ?: ['available' => false, 'requested' => false, 'status' => 'unknown', 'requestCount' => 0, 'lastRequester' => 'N/A', 'requestDate' => 'N/A', 'voteScore' => 'N/A', 'popularity' => 'N/A']);
+        } else {
+            echo json_encode(['available' => false, 'requested' => false, 'status' => 'unknown', 'requestCount' => 0, 'lastRequester' => 'N/A', 'requestDate' => 'N/A', 'voteScore' => 'N/A', 'popularity' => 'N/A']);
+        }
         exit;
     }
     
@@ -1373,23 +1417,62 @@ function getHeroImageUrl($thumb) {
                 <div class="media-modal-section" id="tautulliStatsSection" style="display: none; border-top: 1px solid #444; padding-top: 15px;">
                     <div class="media-modal-section-title">📊 Watch Statistics (Tautulli)</div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px;">
-                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; text-align: center;">
+                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
                             <div style="color: #999; font-size: 12px;">Total Plays</div>
                             <div style="color: #ff8c00; font-size: 20px; font-weight: bold;" id="tautulliPlays">-</div>
                         </div>
-                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; text-align: center;">
+                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
                             <div style="color: #999; font-size: 12px;">Watch Count</div>
                             <div style="color: #ff8c00; font-size: 20px; font-weight: bold;" id="tautulliWatch">-</div>
                         </div>
+                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
+                            <div style="color: #999; font-size: 12px;">Total Duration</div>
+                            <div style="color: #ff8c00; font-size: 18px; font-weight: bold;" id="tautulliDuration">-</div>
+                        </div>
+                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
+                            <div style="color: #999; font-size: 12px;">Unique Viewers</div>
+                            <div style="color: #ff8c00; font-size: 20px; font-weight: bold;" id="tautulliUsers">-</div>
+                        </div>
+                    </div>
+                    <div id="tautulliLastWatched" style="margin-top: 12px; padding: 10px; background: #1a1a1a; border-radius: 4px; font-size: 13px; color: #ccc;">
+                        Last watched: <span style="color: #ff8c00;">-</span>
                     </div>
                 </div>
 
                 <div class="media-modal-section" id="overseerrStatusSection" style="display: none; border-top: 1px solid #444; padding-top: 15px;">
                     <div class="media-modal-section-title">📋 Request Status (Overseerr)</div>
                     <div style="margin-top: 10px;">
-                        <div id="overseerrStatus" style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
-                            <span style="color: #999;">Status: </span>
-                            <span id="overseerrStatusText" style="color: #ff8c00; font-weight: bold;">-</span>
+                        <div style="background: #1a1a1a; padding: 12px; border-radius: 4px; margin-bottom: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="color: #999; font-size: 12px;">Status</div>
+                                    <div id="overseerrStatusText" style="color: #ff8c00; font-weight: bold; font-size: 16px; margin-top: 4px;">-</div>
+                                </div>
+                                <div style="text-align: right;">
+                                    <div style="color: #999; font-size: 12px;">Requests</div>
+                                    <div id="overseerrRequestCount" style="color: #ff8c00; font-weight: bold; font-size: 20px; margin-top: 4px;">0</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="overseerrRequestDetails" style="display: none;">
+                            <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; margin-bottom: 10px;">
+                                <div style="color: #999; font-size: 12px;">Last Requested By</div>
+                                <div id="overseerrLastRequester" style="color: #e5e5e5; margin-top: 4px;">-</div>
+                            </div>
+                            <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; margin-bottom: 10px;">
+                                <div style="color: #999; font-size: 12px;">Request Date</div>
+                                <div id="overseerrRequestDate" style="color: #e5e5e5; margin-top: 4px;">-</div>
+                            </div>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                            <div style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
+                                <div style="color: #999; font-size: 12px;">Vote Score</div>
+                                <div id="overseerrVote" style="color: #ff8c00; font-weight: bold; margin-top: 4px;">-</div>
+                            </div>
+                            <div style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
+                                <div style="color: #999; font-size: 12px;">Popularity</div>
+                                <div id="overseerrPopularity" style="color: #ff8c00; font-weight: bold; margin-top: 4px;">-</div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1469,13 +1552,35 @@ function getHeroImageUrl($thumb) {
             // Fetch Overseerr status
             const overseerrEnabled = <?php echo $overseerrEnabled ? 'true' : 'false'; ?>;
             if (overseerrEnabled && media.key) {
-                fetch('?action=getOverseerrStatus&key=' + media.key + '&type=' + media.type)
+                fetch('?action=getOverseerrStatus&key=' + media.key + '&type=' + media.type + '&tmdbId=' + (media.tmdbId || ''))
                     .then(r => r.json())
                     .then(data => {
-                        if (data.available !== undefined) {
+                        if (data.status && data.status !== 'unknown') {
                             document.getElementById('overseerrStatusSection').style.display = 'block';
-                            const statusText = data.available ? '✅ Available' : (data.requested ? '⏳ Requested' : '❌ Not Available');
+                            
+                            // Status text with emoji
+                            const statusEmoji = {
+                                'available': '✅',
+                                'pending': '⏳',
+                                'processing': '⚙️'
+                            };
+                            const statusText = (statusEmoji[data.status] || '❓') + ' ' + 
+                                data.status.charAt(0).toUpperCase() + data.status.slice(1);
                             document.getElementById('overseerrStatusText').textContent = statusText;
+                            
+                            // Request details
+                            document.getElementById('overseerrRequestCount').textContent = data.requestCount || 0;
+                            if ((data.requestCount || 0) > 0) {
+                                document.getElementById('overseerrRequestDetails').style.display = 'block';
+                                document.getElementById('overseerrLastRequester').textContent = data.lastRequester || 'Unknown';
+                                document.getElementById('overseerrRequestDate').textContent = data.requestDate || 'Unknown';
+                            } else {
+                                document.getElementById('overseerrRequestDetails').style.display = 'none';
+                            }
+                            
+                            // Vote and popularity
+                            document.getElementById('overseerrVote').textContent = data.voteScore || 'N/A';
+                            document.getElementById('overseerrPopularity').textContent = data.popularity || 'N/A';
                         }
                     })
                     .catch(e => console.log('Overseerr fetch failed'));
@@ -1493,6 +1598,20 @@ function getHeroImageUrl($thumb) {
                             document.getElementById('tautulliStatsSection').style.display = 'block';
                             document.getElementById('tautulliPlays').textContent = data.plays || '0';
                             document.getElementById('tautulliWatch').textContent = data.watchCount || '0';
+                            document.getElementById('tautulliDuration').textContent = data.totalDuration || '0m';
+                            document.getElementById('tautulliUsers').textContent = data.userCount || '0';
+                            
+                            // Last watched date
+                            if (data.lastWatched && data.lastWatched > 0) {
+                                const lastWatchedDate = new Date(data.lastWatched * 1000);
+                                const dateStr = lastWatchedDate.toLocaleDateString('en-US', { 
+                                    month: 'short', 
+                                    day: 'numeric', 
+                                    year: 'numeric'
+                                });
+                                document.getElementById('tautulliLastWatched').innerHTML = 
+                                    'Last watched: <span style="color: #ff8c00;">' + dateStr + '</span>';
+                            }
                         }
                     })
                     .catch(e => console.log('Tautulli fetch failed'));
