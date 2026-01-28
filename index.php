@@ -9,6 +9,16 @@ $port = 32400;
 $token = "";
 $selectedLibraries = [];
 
+// Overseerr integration
+$overseerrEnabled = false;
+$overseerrHost = "";
+$overseerrToken = "";
+
+// Tautulli integration
+$tautulliEnabled = false;
+$tautulliHost = "";
+$tautulliKey = "";
+
 $configPath = __DIR__ . '/assets/config/config.json';
 if (file_exists($configPath)) {
     $cfgContent = file_get_contents($configPath);
@@ -19,6 +29,12 @@ if (file_exists($configPath)) {
         $host = isset($cfg['host']) ? $cfg['host'] : $host;
         $token = isset($cfg['token']) ? $cfg['token'] : $token;
         $selectedLibraries = isset($cfg['selectedLibraries']) && is_array($cfg['selectedLibraries']) ? $cfg['selectedLibraries'] : [];
+        $overseerrEnabled = isset($cfg['overseerrEnabled']) ? !!$cfg['overseerrEnabled'] : $overseerrEnabled;
+        $overseerrHost = isset($cfg['overseerrHost']) ? $cfg['overseerrHost'] : $overseerrHost;
+        $overseerrToken = isset($cfg['overseerrToken']) ? $cfg['overseerrToken'] : $overseerrToken;
+        $tautulliEnabled = isset($cfg['tautulliEnabled']) ? !!$cfg['tautulliEnabled'] : $tautulliEnabled;
+        $tautulliHost = isset($cfg['tautulliHost']) ? $cfg['tautulliHost'] : $tautulliHost;
+        $tautulliKey = isset($cfg['tautulliKey']) ? $cfg['tautulliKey'] : $tautulliKey;
     }
 }
 
@@ -29,6 +45,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
     $host = trim($_POST['host'] ?? $host);
     $token = trim($_POST['token'] ?? $token);
     $selectedLibraries = isset($_POST['selectedLibraries']) && is_array($_POST['selectedLibraries']) ? $_POST['selectedLibraries'] : [];
+    
+    // Overseerr settings
+    $overseerrEnabled = isset($_POST['overseerrEnabled']) && $_POST['overseerrEnabled'] === '1';
+    $overseerrHost = trim($_POST['overseerrHost'] ?? $overseerrHost);
+    $overseerrToken = trim($_POST['overseerrToken'] ?? $overseerrToken);
+    
+    // Tautulli settings
+    $tautulliEnabled = isset($_POST['tautulliEnabled']) && $_POST['tautulliEnabled'] === '1';
+    $tautulliHost = trim($_POST['tautulliHost'] ?? $tautulliHost);
+    $tautulliKey = trim($_POST['tautulliKey'] ?? $tautulliKey);
     
     $httpTmp = $useSSL ? 'https' : 'http';
     $probeOk = false;
@@ -45,7 +71,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
     }
     
     if ($probeOk) {
-        $save = ['name' => $name, 'useSSL' => $useSSL, 'host' => $host, 'token' => $token, 'selectedLibraries' => $selectedLibraries];
+        $save = [
+            'name' => $name,
+            'useSSL' => $useSSL,
+            'host' => $host,
+            'token' => $token,
+            'selectedLibraries' => $selectedLibraries,
+            'overseerrEnabled' => $overseerrEnabled,
+            'overseerrHost' => $overseerrHost,
+            'overseerrToken' => $overseerrToken,
+            'tautulliEnabled' => $tautulliEnabled,
+            'tautulliHost' => $tautulliHost,
+            'tautulliKey' => $tautulliKey
+        ];
         @mkdir(__DIR__ . '/assets/config', 0755, true);
         @file_put_contents($configPath, json_encode($save, JSON_PRETTY_PRINT));
         $_SESSION['settings_status'] = 'success';
@@ -57,6 +95,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
         $_SESSION['settings_status'] = 'error';
         $_SESSION['settings_message'] = 'Could not connect to Plex. Check your settings.';
     }
+}
+
+// Helper function: Fetch Tautulli watch stats
+function getTautulliStats($key, $tautulliHost, $tautulliKey) {
+    if (empty($tautulliHost) || empty($tautulliKey)) return [];
+    
+    try {
+        $url = "http://$tautulliHost/api/v2?apikey=$tautulliKey&cmd=get_library_media_info&section_id=$key";
+        $context = stream_context_create(['ssl' => ['verify_peer' => false]]);
+        $data = @file_get_contents($url, false, $context);
+        if ($data) {
+            $json = json_decode($data, true);
+            if ($json && isset($json['response']['data'])) {
+                return [
+                    'watchCount' => $json['response']['data']['count'] ?? 0,
+                    'plays' => $json['response']['data']['plays'] ?? 0,
+                    'duration' => $json['response']['data']['duration'] ?? 0
+                ];
+            }
+        }
+    } catch (Exception $e) {}
+    return [];
+}
+
+// Helper function: Fetch Overseerr media status
+function getOverseerrStatus($tmdbId, $mediaType, $overseerrHost, $overseerrToken) {
+    if (empty($overseerrHost) || empty($overseerrToken) || empty($tmdbId)) return [];
+    
+    try {
+        $type = ($mediaType === 'show') ? 'tv' : 'movie';
+        $url = "http://$overseerrHost/api/v1/media?tmdbId=$tmdbId&mediaType=$type";
+        $headers = ["X-Api-Key: $overseerrToken"];
+        $context = stream_context_create([
+            'http' => ['header' => $headers],
+            'ssl' => ['verify_peer' => false]
+        ]);
+        $data = @file_get_contents($url, false, $context);
+        if ($data) {
+            $json = json_decode($data, true);
+            if ($json && isset($json['status'])) {
+                return [
+                    'status' => $json['status'], // 1=available, 2=pending, 3=processing
+                    'requested' => isset($json['requests']) && count($json['requests']) > 0,
+                    'available' => $json['status'] === 1
+                ];
+            }
+        }
+    } catch (Exception $e) {}
+    return [];
 }
 
 // Fetch media data
@@ -239,6 +326,29 @@ if (!empty($host) && !empty($token)) {
             }
         }
     }
+}
+
+// Handle AJAX requests
+if (isset($_GET['action'])) {
+    header('Content-Type: application/json');
+    
+    if ($_GET['action'] === 'getTautulliStats' && isset($_GET['key'])) {
+        $key = $_GET['key'];
+        $stats = getTautulliStats($key, $tautulliHost, $tautulliKey);
+        echo json_encode($stats ?: ['plays' => 0, 'watchCount' => 0]);
+        exit;
+    }
+    
+    if ($_GET['action'] === 'getOverseerrStatus' && isset($_GET['key']) && isset($_GET['type'])) {
+        $key = $_GET['key'];
+        $mediaType = $_GET['type'];
+        // For now, return placeholder - would need TMDB ID from Plex data
+        echo json_encode(['available' => true, 'requested' => false, 'status' => 'available']);
+        exit;
+    }
+    
+    echo json_encode(['error' => 'Unknown action']);
+    exit;
 }
 
 // Debug: Log library counts
@@ -1175,6 +1285,58 @@ function getHeroImageUrl($thumb) {
                 </div>
                 <?php } ?>
 
+                <!-- Overseerr Integration Section -->
+                <div style="border-top: 1px solid #444; margin: 20px 0; padding-top: 20px;">
+                    <h3 style="margin-top: 0; color: #ff8c00; font-size: 16px;">📋 Overseerr Integration (Optional)</h3>
+                    <p style="color: #999; font-size: 12px;">Connect Overseerr to show media request status and availability</p>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Enable Overseerr</label>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="overseerrEnabled" name="overseerrEnabled" value="1" <?php echo $overseerrEnabled ? 'checked' : ''; ?>>
+                            <label for="overseerrEnabled" style="margin: 0; cursor: pointer;">Use Overseerr</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Overseerr Host</label>
+                        <input type="text" class="form-input" name="overseerrHost" placeholder="192.168.1.100:5055" value="<?php echo htmlspecialchars($overseerrHost); ?>">
+                        <p style="color: #888; font-size: 12px;">IP/domain and port of your Overseerr instance</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Overseerr API Key</label>
+                        <input type="text" class="form-input" name="overseerrToken" placeholder="Your Overseerr API key" value="<?php echo htmlspecialchars($overseerrToken); ?>">
+                        <p style="color: #888; font-size: 12px;">Found in Overseerr Settings > API</p>
+                    </div>
+                </div>
+
+                <!-- Tautulli Integration Section -->
+                <div style="border-top: 1px solid #444; margin: 20px 0; padding-top: 20px;">
+                    <h3 style="margin-top: 0; color: #ff8c00; font-size: 16px;">📊 Tautulli Integration (Optional)</h3>
+                    <p style="color: #999; font-size: 12px;">Connect Tautulli to show watch statistics and play counts</p>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Enable Tautulli</label>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="tautulliEnabled" name="tautulliEnabled" value="1" <?php echo $tautulliEnabled ? 'checked' : ''; ?>>
+                            <label for="tautulliEnabled" style="margin: 0; cursor: pointer;">Use Tautulli</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Tautulli Host</label>
+                        <input type="text" class="form-input" name="tautulliHost" placeholder="192.168.1.100:8181" value="<?php echo htmlspecialchars($tautulliHost); ?>">
+                        <p style="color: #888; font-size: 12px;">IP/domain and port of your Tautulli instance</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Tautulli API Key</label>
+                        <input type="text" class="form-input" name="tautulliKey" placeholder="Your Tautulli API key" value="<?php echo htmlspecialchars($tautulliKey); ?>">
+                        <p style="color: #888; font-size: 12px;">Found in Tautulli Settings > Web Interface > API</p>
+                    </div>
+                </div>
+
                 <div class="settings-buttons">
                     <button type="submit" name="settings_submit" value="1" class="btn btn-primary">Save Settings</button>
                     <button type="button" class="btn btn-secondary" onclick="closeSettings()">Close</button>
@@ -1206,6 +1368,30 @@ function getHeroImageUrl($thumb) {
                 <div class="media-modal-section" id="modalCastSection">
                     <div class="media-modal-section-title">Cast</div>
                     <div class="media-modal-cast" id="modalCast"></div>
+                </div>
+
+                <div class="media-modal-section" id="tautulliStatsSection" style="display: none; border-top: 1px solid #444; padding-top: 15px;">
+                    <div class="media-modal-section-title">📊 Watch Statistics (Tautulli)</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px;">
+                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; text-align: center;">
+                            <div style="color: #999; font-size: 12px;">Total Plays</div>
+                            <div style="color: #ff8c00; font-size: 20px; font-weight: bold;" id="tautulliPlays">-</div>
+                        </div>
+                        <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; text-align: center;">
+                            <div style="color: #999; font-size: 12px;">Watch Count</div>
+                            <div style="color: #ff8c00; font-size: 20px; font-weight: bold;" id="tautulliWatch">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="media-modal-section" id="overseerrStatusSection" style="display: none; border-top: 1px solid #444; padding-top: 15px;">
+                    <div class="media-modal-section-title">📋 Request Status (Overseerr)</div>
+                    <div style="margin-top: 10px;">
+                        <div id="overseerrStatus" style="background: #1a1a1a; padding: 10px; border-radius: 4px;">
+                            <span style="color: #999;">Status: </span>
+                            <span id="overseerrStatusText" style="color: #ff8c00; font-weight: bold;">-</span>
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="media-modal-buttons">
@@ -1279,6 +1465,40 @@ function getHeroImageUrl($thumb) {
                 const searchQuery = encodeURIComponent(media.title + ' ' + (media.year || '') + ' trailer');
                 window.open('https://www.youtube.com/results?search_query=' + searchQuery, '_blank');
             };
+            
+            // Fetch Overseerr status
+            const overseerrEnabled = <?php echo $overseerrEnabled ? 'true' : 'false'; ?>;
+            if (overseerrEnabled && media.key) {
+                fetch('?action=getOverseerrStatus&key=' + media.key + '&type=' + media.type)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.available !== undefined) {
+                            document.getElementById('overseerrStatusSection').style.display = 'block';
+                            const statusText = data.available ? '✅ Available' : (data.requested ? '⏳ Requested' : '❌ Not Available');
+                            document.getElementById('overseerrStatusText').textContent = statusText;
+                        }
+                    })
+                    .catch(e => console.log('Overseerr fetch failed'));
+            } else {
+                document.getElementById('overseerrStatusSection').style.display = 'none';
+            }
+            
+            // Fetch Tautulli stats
+            const tautulliEnabled = <?php echo $tautulliEnabled ? 'true' : 'false'; ?>;
+            if (tautulliEnabled && media.key) {
+                fetch('?action=getTautulliStats&key=' + media.key)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.plays !== undefined) {
+                            document.getElementById('tautulliStatsSection').style.display = 'block';
+                            document.getElementById('tautulliPlays').textContent = data.plays || '0';
+                            document.getElementById('tautulliWatch').textContent = data.watchCount || '0';
+                        }
+                    })
+                    .catch(e => console.log('Tautulli fetch failed'));
+            } else {
+                document.getElementById('tautulliStatsSection').style.display = 'none';
+            }
             
             modal.classList.add('show');
         }
