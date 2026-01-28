@@ -684,6 +684,8 @@ foreach ($mediaData as $lib) {
 // Create section-specific hero data
 $heroMovies = [];
 $heroTV = [];
+$heroMusic = [];
+$heroPhotos = [];
 $heroTrending = [];
 
 // Organize media by type for different views
@@ -693,6 +695,8 @@ $musicLibraries = [];
 $photoLibraries = [];
 $allMovies = [];
 $allTV = [];
+$allMusic = [];
+$allPhotos = [];
 $top20Recent = [];
 
 foreach ($mediaData as $libKey => $lib) {
@@ -704,8 +708,10 @@ foreach ($mediaData as $libKey => $lib) {
         $allTV = array_merge($allTV, $lib['items']);
     } elseif ($lib['type'] === 'artist') {
         $musicLibraries[$libKey] = $lib;
+        $allMusic = array_merge($allMusic, $lib['items']);
     } elseif ($lib['type'] === 'photo') {
         $photoLibraries[$libKey] = $lib;
+        $allPhotos = array_merge($allPhotos, $lib['items']);
     }
 }
 
@@ -720,7 +726,16 @@ foreach ($mediaData as $lib) {
 // Populate section-specific hero data
 $heroMovies = array_slice($allMovies, 0, 20);
 $heroTV = array_slice($allTV, 0, 20);
+$heroMusic = array_slice($allMusic, 0, 20);
+$heroPhotos = array_slice($allPhotos, 0, 20);
 $heroTrending = array_slice($trendingMedia, 0, 20);
+
+// Home banner: Mix of movies, TV, and music
+$heroHome = array_merge(
+    array_slice($allMovies, 0, 8),
+    array_slice($allTV, 0, 7),
+    array_slice($allMusic, 0, 5)
+);
 
 function getImageUrl($thumb) {
     global $http, $host, $token;
@@ -2081,35 +2096,37 @@ function getHeroImageUrl($thumb) {
             
             // Update hero banner based on section
             const heroSection = document.getElementById('heroSection');
-            let heroData = heroItems; // default to home
+            let heroData = null;
             let sectionTitle = 'Top 20 Recently Added';
             
-            if (viewName === 'movies') {
+            if (viewName === 'home') {
+                heroData = <?php echo json_encode($heroHome); ?>;
+                sectionTitle = '🏠 Movies, TV & Music';
+            } else if (viewName === 'movies') {
                 heroData = <?php echo json_encode($heroMovies); ?>;
                 sectionTitle = '🎬 Movies';
             } else if (viewName === 'tv') {
                 heroData = <?php echo json_encode($heroTV); ?>;
                 sectionTitle = '📺 TV Shows';
+            } else if (viewName === 'music') {
+                heroData = <?php echo json_encode($heroMusic); ?>;
+                sectionTitle = '🎵 Music';
+            } else if (viewName === 'photos') {
+                heroData = <?php echo json_encode($heroPhotos); ?>;
+                sectionTitle = '📷 Photos';
             } else if (viewName === 'trending') {
                 heroData = <?php echo json_encode($heroTrending); ?>;
                 sectionTitle = '📈 Trending Now';
-            } else if (viewName === 'music') {
-                sectionTitle = '🎵 Music';
-                heroSection.style.display = 'none'; // Hide hero for music
-            } else if (viewName === 'photos') {
-                sectionTitle = '📷 Photos';
-                heroSection.style.display = 'none'; // Hide hero for photos
-            } else {
-                heroSection.style.display = 'block';
-                sectionTitle = '🏠 Recently Added';
             }
             
-            // Update hero if we have data and it should be visible
-            if (heroData && heroData.length > 0 && viewName !== 'music' && viewName !== 'photos') {
+            // Update hero if we have data
+            if (heroData && heroData.length > 0) {
                 heroSection.style.display = 'block';
                 currentHeroIndex = 0;
                 currentHeroData = heroData;
                 updateHero(0);
+            } else {
+                heroSection.style.display = 'none';
             }
             
             // Scroll to top
