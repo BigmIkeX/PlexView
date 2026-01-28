@@ -19,6 +19,9 @@ $tautulliEnabled = false;
 $tautulliHost = "";
 $tautulliKey = "";
 
+// TMDB integration (for Overseerr media ID lookup)
+$tmdbApiKey = "";
+
 $configPath = __DIR__ . '/assets/config/config.json';
 if (file_exists($configPath)) {
     $cfgContent = file_get_contents($configPath);
@@ -35,6 +38,7 @@ if (file_exists($configPath)) {
         $tautulliEnabled = isset($cfg['tautulliEnabled']) ? !!$cfg['tautulliEnabled'] : $tautulliEnabled;
         $tautulliHost = isset($cfg['tautulliHost']) ? $cfg['tautulliHost'] : $tautulliHost;
         $tautulliKey = isset($cfg['tautulliKey']) ? $cfg['tautulliKey'] : $tautulliKey;
+        $tmdbApiKey = isset($cfg['tmdbApiKey']) ? $cfg['tmdbApiKey'] : $tmdbApiKey;
     }
 }
 
@@ -55,6 +59,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
     $tautulliEnabled = isset($_POST['tautulliEnabled']) && $_POST['tautulliEnabled'] === '1';
     $tautulliHost = trim($_POST['tautulliHost'] ?? $tautulliHost);
     $tautulliKey = trim($_POST['tautulliKey'] ?? $tautulliKey);
+    
+    // TMDB settings
+    $tmdbApiKey = trim($_POST['tmdbApiKey'] ?? $tmdbApiKey);
     
     $httpTmp = $useSSL ? 'https' : 'http';
     $probeOk = false;
@@ -82,7 +89,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['settings_submit'])) {
             'overseerrToken' => $overseerrToken,
             'tautulliEnabled' => $tautulliEnabled,
             'tautulliHost' => $tautulliHost,
-            'tautulliKey' => $tautulliKey
+            'tautulliKey' => $tautulliKey,
+            'tmdbApiKey' => $tmdbApiKey
         ];
         @mkdir(__DIR__ . '/assets/config', 0755, true);
         @file_put_contents($configPath, json_encode($save, JSON_PRETTY_PRINT));
@@ -182,6 +190,65 @@ function getOverseerrStatus($tmdbId, $mediaType, $overseerrHost, $overseerrToken
         }
     } catch (Exception $e) {}
     return [];
+}
+
+// Helper function: Search TMDB for media by title
+function searchTmdbMedia($title, $year, $mediaType, $tmdbApiKey) {
+    if (empty($tmdbApiKey) || empty($title)) return null;
+    
+    try {
+        $endpoint = ($mediaType === 'show') ? 'search/tv' : 'search/movie';
+        $url = "https://api.themoviedb.org/3/$endpoint?api_key=$tmdbApiKey&query=" . urlencode($title);
+        if (!empty($year)) {
+            $url .= "&year=$year";
+        }
+        
+        $context = stream_context_create([
+            'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]
+        ]);
+        $data = @file_get_contents($url, false, $context);
+        if ($data) {
+            $json = json_decode($data, true);
+            if ($json && isset($json['results']) && is_array($json['results']) && count($json['results']) > 0) {
+                $result = $json['results'][0];
+                return [
+                    'tmdbId' => $result['id'] ?? null,
+                    'tvdbId' => $result['external_ids']['tvdb_id'] ?? null,
+                    'title' => $result['title'] ?? $result['name'] ?? $title
+                ];
+            }
+        }
+    } catch (Exception $e) {}
+    return null;
+}
+
+// Helper function: Search Overseerr for media by title
+function searchOverseerrMedia($title, $mediaType, $overseerrHost, $overseerrToken) {
+    if (empty($overseerrHost) || empty($overseerrToken) || empty($title)) return null;
+    
+    try {
+        $type = ($mediaType === 'show') ? 'tv' : 'movie';
+        $url = "http://$overseerrHost/api/v1/search?query=" . urlencode($title) . "&type=$type";
+        $headers = ["X-Api-Key: $overseerrToken"];
+        $context = stream_context_create([
+            'http' => ['header' => $headers],
+            'ssl' => ['verify_peer' => false]
+        ]);
+        $data = @file_get_contents($url, false, $context);
+        if ($data) {
+            $json = json_decode($data, true);
+            if ($json && isset($json['results']) && is_array($json['results']) && count($json['results']) > 0) {
+                $result = $json['results'][0];
+                return [
+                    'tmdbId' => $result['tmdbId'] ?? $result['id'] ?? null,
+                    'tvdbId' => $result['tvdbId'] ?? null,
+                    'mediaId' => $result['id'] ?? null,
+                    'title' => $result['title'] ?? $result['name'] ?? $title
+                ];
+            }
+        }
+    } catch (Exception $e) {}
+    return null;
 }
 
 // Fetch media data
@@ -489,35 +556,57 @@ if (isset($_GET['action']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $year = $input['year'] ?? '';
         
         if (!empty($title) && !empty($overseerrHost) && !empty($overseerrToken)) {
-            // For now, we'll use a placeholder request since we need TMDB ID
-            // In production, you'd want to search TMDB API for the ID first
-            // But Overseerr API can accept media requests with title searches
+            // Search for media ID using TMDB first, fallback to Overseerr search
+            $mediaId = null;
+            $tvdbId = null;
             
-            $type = ($mediaType === 'show') ? 'tv' : 'movie';
-            $requestUrl = "http://$overseerrHost/api/v1/request";
+            // Try TMDB first if API key available
+            if (!empty($tmdbApiKey)) {
+                $tmdbResult = searchTmdbMedia($title, $year, $mediaType, $tmdbApiKey);
+                if ($tmdbResult) {
+                    $mediaId = $tmdbResult['tmdbId'];
+                    $tvdbId = $tmdbResult['tvdbId'];
+                }
+            }
             
-            $postData = json_encode([
-                'mediaType' => $type,
-                'mediaId' => 0, // Would need TMDB ID here
-                'tvdbId' => 0,
-                'userId' => null,
-                'is4k' => false
-            ]);
+            // Fallback to Overseerr search if TMDB didn't work
+            if (empty($mediaId)) {
+                $overseerrResult = searchOverseerrMedia($title, $mediaType, $overseerrHost, $overseerrToken);
+                if ($overseerrResult) {
+                    $mediaId = $overseerrResult['tmdbId'] ?? $overseerrResult['mediaId'];
+                    $tvdbId = $overseerrResult['tvdbId'];
+                }
+            }
             
-            $context = stream_context_create([
-                'http' => [
-                    'method' => 'POST',
-                    'header' => "X-Api-Key: $overseerrToken\r\nContent-Type: application/json",
-                    'content' => $postData
-                ],
-                'ssl' => ['verify_peer' => false]
-            ]);
-            
-            $result = @file_get_contents($requestUrl, false, $context);
-            if ($result !== false) {
-                echo json_encode(['success' => true, 'message' => 'Request submitted successfully']);
+            if (!empty($mediaId)) {
+                $type = ($mediaType === 'show') ? 'tv' : 'movie';
+                $requestUrl = "http://$overseerrHost/api/v1/request";
+                
+                $postData = json_encode([
+                    'mediaType' => $type,
+                    'mediaId' => $mediaId,
+                    'tvdbId' => $tvdbId ?? null,
+                    'userId' => null,
+                    'is4k' => false
+                ]);
+                
+                $context = stream_context_create([
+                    'http' => [
+                        'method' => 'POST',
+                        'header' => "X-Api-Key: $overseerrToken\r\nContent-Type: application/json",
+                        'content' => $postData
+                    ],
+                    'ssl' => ['verify_peer' => false]
+                ]);
+                
+                $result = @file_get_contents($requestUrl, false, $context);
+                if ($result !== false) {
+                    echo json_encode(['success' => true, 'message' => 'Request submitted successfully']);
+                } else {
+                    echo json_encode(['success' => false, 'message' => 'Failed to submit request to Overseerr']);
+                }
             } else {
-                echo json_encode(['success' => false, 'message' => 'Failed to submit request']);
+                echo json_encode(['success' => false, 'message' => 'Could not find media. Check TMDB API key or Overseerr connection.']);
             }
         } else {
             echo json_encode(['success' => false, 'message' => 'Missing required information']);
@@ -1546,6 +1635,12 @@ function getHeroImageUrl($thumb) {
                         <label class="form-label">Tautulli API Key</label>
                         <input type="text" class="form-input" name="tautulliKey" placeholder="Your Tautulli API key" value="<?php echo htmlspecialchars($tautulliKey); ?>">
                         <p style="color: #888; font-size: 12px;">Found in Tautulli Settings > Web Interface > API</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">TMDB API Key</label>
+                        <input type="text" class="form-input" name="tmdbApiKey" placeholder="Your TMDB API key" value="<?php echo htmlspecialchars($tmdbApiKey); ?>">
+                        <p style="color: #888; font-size: 12px;">Required for Overseerr requests. Get one at <a href="https://www.themoviedb.org/settings/api" target="_blank" style="color: #b0a5ff;">themoviedb.org</a></p>
                     </div>
                 </div>
 
