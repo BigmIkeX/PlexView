@@ -27,8 +27,13 @@ A modern, streaming-style web interface for your Plex Media Server with hero rot
 - Trailer links (YouTube search)
 - Description/plot summary
 
-⚙️ **Configuration**
+⚙️ **Optional Integrations**
+- **Overseerr**: Show media request status and availability
+- **Tautulli**: Display watch statistics, play counts, and user activity
+
+🔗 **Configuration**
 - Settings panel to connect to your Plex server
+- Optional Overseerr and Tautulli integration setup
 - Select which libraries to display
 - Save preferences locally in JSON config
 
@@ -105,6 +110,40 @@ Settings are stored in `assets/config/config.json`:
 
 **Note**: This file is NOT tracked in version control for security.
 
+## Optional Integrations
+
+### Overseerr Integration
+
+[Overseerr](https://overseerr.dev/) is a request management and media discovery tool for Plex. PlexView can display media request status and availability.
+
+**Setup:**
+1. Install and configure [Overseerr](https://docs.overseerr.dev/index.html)
+2. In PlexView Settings, enable **Overseerr Integration**
+3. Enter your Overseerr host (e.g., `192.168.1.100:5055`)
+4. Get your API key from **Overseerr Settings → API**
+5. Save and refresh
+
+**What it shows:**
+- ✅ Available - Content is in your Plex library
+- ⏳ Requested - Someone has requested this content
+- ❌ Not Available - Content is not available/requested
+
+### Tautulli Integration
+
+[Tautulli](https://tautulli.com/) is a monitoring and analytics tool for Plex. PlexView can display watch statistics and usage data.
+
+**Setup:**
+1. Install and configure [Tautulli](https://docs.tautulli.com/index.html)
+2. In PlexView Settings, enable **Tautulli Integration**
+3. Enter your Tautulli host (e.g., `192.168.1.100:8181`)
+4. Get your API key from **Tautulli Settings → Web Interface → API**
+5. Save and refresh
+
+**What it shows:**
+- **Total Plays**: Number of times content has been played
+- **Watch Count**: Total watch instances (per user)
+- **Duration**: Total time spent watching
+
 ## Usage
 
 ### Navigation
@@ -114,13 +153,15 @@ Settings are stored in `assets/config/config.json`:
 - **📺 TV**: TV show libraries only
 - **🎵 Music**: Music/artist libraries only
 - **📷 Photos**: Photo libraries only
-- **⚙️ Settings**: Configure Plex connection
+- **⚙️ Settings**: Configure Plex connection and optional integrations
 
 ### Viewing Media
 
 - **Click any media card** to open the details modal
 - **"More Info"** from hero banner also opens details
 - **View trailers** by clicking the trailer button
+- **See statistics** (if Tautulli enabled) showing play counts and watch history
+- **Check request status** (if Overseerr enabled) to see if available/requested
 - **Close** by clicking the backdrop or × button
 
 ### Supported Library Types
@@ -136,7 +177,7 @@ Settings are stored in `assets/config/config.json`:
 
 ```
 plexview/
-├── index.php                    # Main application (1322 lines)
+├── index.php                    # Main application
 ├── README.md                    # This file
 ├── .gitignore                   # Git ignore rules
 ├── assets/
@@ -148,17 +189,36 @@ plexview/
 
 ## API Integration
 
-PlexView communicates with your Plex server using the Plex Media Server API:
+PlexView communicates with multiple APIs:
 
-### Key Endpoints Used
+### Plex Media Server API
+
+Plex API endpoints used:
 
 - `GET /library/sections` - List all libraries
 - `GET /library/sections/{key}/recentlyAdded?limit=30` - Recently added items
 - `GET /library/sections/{key}/all?X-Plex-Container-Size=30` - Full library (paginated)
 - `GET /photo/:/transcode?url=...` - Image transcoding
 
-### Plex API Documentation
+### Overseerr API
+
+*(Optional)* Fetches media request and availability status:
+
+- `GET /api/v1/media?tmdbId={id}&mediaType={type}` - Get media status
+- Returns: `status` (1=available, 2=pending, 3=processing), `requests` (array of requests)
+
+### Tautulli API
+
+*(Optional)* Fetches watch statistics and analytics:
+
+- `GET /api/v2?apikey={key}&cmd=get_library_media_info&section_id={id}` - Get library statistics
+- Returns: `count`, `plays`, `duration`, and other metadata
+
+### Documentation Links
+
 - [Plex API Reference](https://www.plexopedia.com/plex-api/)
+- [Overseerr Docs](https://docs.overseerr.dev/)
+- [Tautulli Docs](https://docs.tautulli.com/)
 - [Official Plex Developer Docs](https://www.plex.tv/api/)
 
 ## Troubleshooting
@@ -183,6 +243,19 @@ PlexView communicates with your Plex server using the Plex Media Server API:
 - Open browser console (F12) for JavaScript errors
 - Ensure JavaScript is enabled
 - Try refreshing the page
+
+### Overseerr/Tautulli sections not appearing
+- Verify the service is running and accessible
+- Check the host/port are correct (without http://)
+- Ensure API key/token is valid
+- Check browser console (F12) for AJAX errors
+- Try toggling the integration off/on in Settings
+
+### Integration data not updating
+- Ensure the services are running and reachable from your web server
+- Check firewall/network rules allow communication
+- Verify API credentials are correct in Settings
+- Look at web server error logs for network timeouts
 
 ## Browser Compatibility
 
