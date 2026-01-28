@@ -191,6 +191,7 @@ error_reporting(0);
 $http = $useSSL ? 'https' : 'http';
 $mediaData = [];
 $allLibraries = [];
+$trendingMedia = [];
 
 if (!empty($host) && !empty($token)) {
     $context = stream_context_create([
@@ -215,6 +216,88 @@ if (!empty($host) && !empty($token)) {
                         'title' => $title,
                         'type' => $type
                     ];
+                }
+            }
+        }
+        
+        // Fetch trending data from first movie/show library
+        if (empty($trendingMedia)) {
+            foreach ($allLibraries as $lib) {
+                if (in_array($lib['type'], ['movie', 'show'])) {
+                    $trendingUrl = "$http://$host/library/sections/" . $lib['key'] . "/recentlyAdded?limit=30&X-Plex-Token=$token";
+                    $trendingData = @file_get_contents($trendingUrl, false, $context);
+                    if ($trendingData) {
+                        $trendingXml = @simplexml_load_string($trendingData);
+                        if ($trendingXml) {
+                            $trendingItems = [];
+                            if ($lib['type'] === 'movie' && isset($trendingXml->Video)) {
+                                foreach ($trendingXml->Video as $item) {
+                                    $cast = [];
+                                    if (isset($item->Role)) {
+                                        foreach ($item->Role as $role) {
+                                            $cast[] = (string)$role['tag'];
+                                            if (count($cast) >= 5) break;
+                                        }
+                                    }
+                                    
+                                    $genres = [];
+                                    if (isset($item->Genre)) {
+                                        foreach ($item->Genre as $genre) {
+                                            $genres[] = (string)$genre['tag'];
+                                        }
+                                    }
+                                    
+                                    $trendingItems[] = [
+                                        'title' => (string)$item['title'],
+                                        'thumb' => (string)$item['thumb'],
+                                        'art' => (string)$item['art'],
+                                        'ratingKey' => (string)$item['ratingKey'],
+                                        'year' => (string)$item['year'],
+                                        'summary' => (string)$item['summary'],
+                                        'rating' => (string)$item['rating'],
+                                        'contentRating' => (string)$item['contentRating'],
+                                        'duration' => (int)$item['duration'],
+                                        'cast' => $cast,
+                                        'genres' => $genres,
+                                        'type' => 'movie'
+                                    ];
+                                }
+                            } elseif ($lib['type'] === 'show' && isset($trendingXml->Directory)) {
+                                foreach ($trendingXml->Directory as $item) {
+                                    $cast = [];
+                                    if (isset($item->Role)) {
+                                        foreach ($item->Role as $role) {
+                                            $cast[] = (string)$role['tag'];
+                                            if (count($cast) >= 5) break;
+                                        }
+                                    }
+                                    
+                                    $genres = [];
+                                    if (isset($item->Genre)) {
+                                        foreach ($item->Genre as $genre) {
+                                            $genres[] = (string)$genre['tag'];
+                                        }
+                                    }
+                                    
+                                    $trendingItems[] = [
+                                        'title' => (string)$item['title'],
+                                        'thumb' => (string)$item['thumb'],
+                                        'art' => (string)$item['art'],
+                                        'ratingKey' => (string)$item['ratingKey'],
+                                        'year' => (string)$item['year'],
+                                        'summary' => (string)$item['summary'],
+                                        'rating' => (string)$item['rating'],
+                                        'contentRating' => (string)$item['contentRating'],
+                                        'cast' => $cast,
+                                        'genres' => $genres,
+                                        'type' => 'show'
+                                    ];
+                                }
+                            }
+                            $trendingMedia = array_slice($trendingItems, 0, 30);
+                            if (!empty($trendingMedia)) break;
+                        }
+                    }
                 }
             }
         }
@@ -387,6 +470,57 @@ if (isset($_GET['action'])) {
             echo json_encode($status ?: ['available' => false, 'requested' => false, 'status' => 'unknown', 'requestCount' => 0, 'lastRequester' => 'N/A', 'requestDate' => 'N/A', 'voteScore' => 'N/A', 'popularity' => 'N/A']);
         } else {
             echo json_encode(['available' => false, 'requested' => false, 'status' => 'unknown', 'requestCount' => 0, 'lastRequester' => 'N/A', 'requestDate' => 'N/A', 'voteScore' => 'N/A', 'popularity' => 'N/A']);
+        }
+        exit;
+    }
+    
+    echo json_encode(['error' => 'Unknown action']);
+    exit;
+}
+
+// Handle POST requests
+if (isset($_GET['action']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+    
+    if ($_GET['action'] === 'requestMedia' && $overseerrEnabled) {
+        $input = json_decode(file_get_contents('php://input'), true);
+        $title = $input['title'] ?? '';
+        $mediaType = $input['type'] ?? 'movie';
+        $year = $input['year'] ?? '';
+        
+        if (!empty($title) && !empty($overseerrHost) && !empty($overseerrToken)) {
+            // For now, we'll use a placeholder request since we need TMDB ID
+            // In production, you'd want to search TMDB API for the ID first
+            // But Overseerr API can accept media requests with title searches
+            
+            $type = ($mediaType === 'show') ? 'tv' : 'movie';
+            $requestUrl = "http://$overseerrHost/api/v1/request";
+            
+            $postData = json_encode([
+                'mediaType' => $type,
+                'mediaId' => 0, // Would need TMDB ID here
+                'tvdbId' => 0,
+                'userId' => null,
+                'is4k' => false
+            ]);
+            
+            $context = stream_context_create([
+                'http' => [
+                    'method' => 'POST',
+                    'header' => "X-Api-Key: $overseerrToken\r\nContent-Type: application/json",
+                    'content' => $postData
+                ],
+                'ssl' => ['verify_peer' => false]
+            ]);
+            
+            $result = @file_get_contents($requestUrl, false, $context);
+            if ($result !== false) {
+                echo json_encode(['success' => true, 'message' => 'Request submitted successfully']);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Failed to submit request']);
+            }
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Missing required information']);
         }
         exit;
     }
@@ -1216,6 +1350,31 @@ function getHeroImageUrl($thumb) {
             <?php } ?>
         </div>
 
+        <!-- TRENDING VIEW -->
+        <div id="trendingView" class="view-container" style="display: none;">
+            <?php if (!empty($trendingMedia)) { ?>
+            <div class="section">
+                <h2 class="section-title">Trending Now</h2>
+                <div class="carousel">
+                    <?php foreach ($trendingMedia as $media) { ?>
+                    <div class="media-card" onclick='showMediaModal(<?php echo json_encode($media); ?>)'>
+                        <img src="<?php echo getImageUrl($media['thumb']); ?>" alt="<?php echo htmlspecialchars($media['title']); ?>">
+                        <div class="media-card-overlay">
+                            <div class="media-card-title"><?php echo htmlspecialchars($media['title']); ?></div>
+                        </div>
+                    </div>
+                    <?php } ?>
+                </div>
+            </div>
+            <?php } else { ?>
+            <div class="empty-state">
+                <div class="empty-state-icon">📈</div>
+                <div class="empty-state-title">No Trending Data</div>
+                <p>Trending content will appear here</p>
+            </div>
+            <?php } ?>
+        </div>
+
         <!-- Empty State (if no media at all) -->
         <?php if (empty($mediaData)) { ?>
         <div class="empty-state">
@@ -1254,6 +1413,15 @@ function getHeroImageUrl($thumb) {
                 </svg>
             </span>
             <span>TV</span>
+        </a>
+        <a class="nav-item" onclick="switchView('trending')" data-view="trending">
+            <span class="nav-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                    <polyline points="17 6 23 6 23 12"></polyline>
+                </svg>
+            </span>
+            <span>Trending</span>
         </a>
         <a class="nav-item" onclick="switchView('music')" data-view="music">
             <span class="nav-icon">
@@ -1411,7 +1579,7 @@ function getHeroImageUrl($thumb) {
                 
                 <div class="media-modal-section" id="modalCastSection">
                     <div class="media-modal-section-title">Cast</div>
-                    <div class="media-modal-cast" id="modalCast"></div>
+                    <div class="media-modal-cast" id="modalCast" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 15px; margin-top: 10px;"></div>
                 </div>
 
                 <div class="media-modal-section" id="tautulliStatsSection" style="display: none; border-top: 1px solid #444; padding-top: 15px;">
@@ -1480,6 +1648,7 @@ function getHeroImageUrl($thumb) {
                 <div class="media-modal-buttons">
                     <button class="btn btn-primary">▶ Play</button>
                     <button class="btn btn-secondary" id="trailerBtn">🎬 Trailer</button>
+                    <button class="btn btn-secondary" id="requestBtn" style="display: none;">📋 Request</button>
                     <button class="btn btn-secondary">+ Add to List</button>
                 </div>
             </div>
@@ -1531,11 +1700,26 @@ function getHeroImageUrl($thumb) {
             const castDiv = document.getElementById('modalCast');
             castDiv.innerHTML = '';
             if (media.cast && media.cast.length > 0) {
-                media.cast.forEach(actor => {
-                    const span = document.createElement('span');
-                    span.className = 'media-cast-item';
-                    span.textContent = actor;
-                    castDiv.appendChild(span);
+                media.cast.forEach((actor, idx) => {
+                    const div = document.createElement('div');
+                    div.style.cssText = 'text-align: center;';
+                    
+                    // Create a placeholder image with actor initial
+                    const initial = actor.charAt(0).toUpperCase();
+                    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'];
+                    const bgColor = colors[idx % colors.length];
+                    
+                    const img = document.createElement('div');
+                    img.style.cssText = `width: 100%; aspect-ratio: 3/4; background: ${bgColor}; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; color: white; margin-bottom: 8px;`;
+                    img.textContent = initial;
+                    
+                    const name = document.createElement('div');
+                    name.style.cssText = 'font-size: 12px; color: #ccc; word-break: break-word; overflow: hidden; text-overflow: ellipsis;';
+                    name.textContent = actor;
+                    
+                    div.appendChild(img);
+                    div.appendChild(name);
+                    castDiv.appendChild(div);
                 });
                 document.getElementById('modalCastSection').style.display = 'block';
             } else {
@@ -1548,6 +1732,48 @@ function getHeroImageUrl($thumb) {
                 const searchQuery = encodeURIComponent(media.title + ' ' + (media.year || '') + ' trailer');
                 window.open('https://www.youtube.com/results?search_query=' + searchQuery, '_blank');
             };
+            
+            // Request button (Overseerr)
+            const requestBtn = document.getElementById('requestBtn');
+            const overseerrEnabledForRequest = <?php echo $overseerrEnabled ? 'true' : 'false'; ?>;
+            if (overseerrEnabledForRequest) {
+                requestBtn.style.display = 'block';
+                requestBtn.onclick = () => {
+                    requestBtn.disabled = true;
+                    requestBtn.textContent = '⏳ Requesting...';
+                    
+                    fetch('?action=requestMedia', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            title: media.title,
+                            type: media.type,
+                            year: media.year,
+                            tmdbId: media.tmdbId || ''
+                        })
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            requestBtn.textContent = '✅ Requested!';
+                            requestBtn.style.backgroundColor = '#28a745';
+                        } else {
+                            requestBtn.textContent = '❌ Request Failed';
+                            requestBtn.style.backgroundColor = '#dc3545';
+                            setTimeout(() => {
+                                requestBtn.textContent = '📋 Request';
+                                requestBtn.style.backgroundColor = '';
+                                requestBtn.disabled = false;
+                            }, 3000);
+                        }
+                    })
+                    .catch(e => {
+                        console.log('Request failed:', e);
+                        requestBtn.textContent = '📋 Request';
+                        requestBtn.disabled = false;
+                    });
+                };
+            }
             
             // Fetch Overseerr status
             const overseerrEnabled = <?php echo $overseerrEnabled ? 'true' : 'false'; ?>;
@@ -1647,7 +1873,7 @@ function getHeroImageUrl($thumb) {
 
         function switchView(viewName) {
             // Hide all views
-            const views = ['homeView', 'moviesView', 'tvView', 'musicView', 'photosView'];
+            const views = ['homeView', 'moviesView', 'tvView', 'trendingView', 'musicView', 'photosView'];
             views.forEach(v => {
                 document.getElementById(v).style.display = 'none';
             });
